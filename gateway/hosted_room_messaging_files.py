@@ -203,6 +203,7 @@ class FilesMenu:
         self.actions = {}
         self.revision = 0
         self.long_codes = False
+        self.approval_callback = None
         self.handle = secrets.token_hex(8)
 
     def check(self):
@@ -238,7 +239,7 @@ class FilesMenu:
         choices = []
         for caption, action in actions:
             if self.event.source.platform.value == "telegram":
-                icon = {"files": "📎", "bots": "🤖"}.get(action[0])
+                icon = {"files": "📎", "bots": "🤖", "approvals": "⚠️"}.get(action[0])
                 if action[0] == "room":
                     icon = "🕘" if caption == text("activity") else "‹"
                 if action[0] == "groups":
@@ -277,11 +278,28 @@ class FilesMenu:
         ])
         return self.page(message, actions)
 
-    async def room_page(self, detail=None, *, view="room"):
-        from gateway.hosted_room_messaging import format_room_detail
+    async def room_page(self, detail=None, *, view="room", bot_query=None):
+        from gateway.hosted_room_messaging import (
+            format_room_bot_detail,
+            format_room_bot_list,
+            format_room_detail,
+            room_bot_picker_choices,
+        )
 
         current = await self.fresh_room()
-        if detail is None:
+        bot_choices = None
+        if view in {"bots", "bot"}:
+            bot_choices = await asyncio.to_thread(
+                room_bot_picker_choices, self.backend, current,
+            )
+            detail = await asyncio.to_thread(
+                format_room_bot_detail if view == "bot" else format_room_bot_list,
+                self.backend,
+                current,
+                *([bot_query] if view == "bot" else []),
+                room_command=self.command,
+            )
+        elif detail is None:
             detail = await asyncio.to_thread(
                 format_room_detail,
                 self.backend,
@@ -290,13 +308,67 @@ class FilesMenu:
                 show_approvals=self.runner._can_approve_group_chats(self.event),
             )
         actions = await self.room_content_actions(current)
+        if self.runner._can_approve_group_chats(self.event):
+            from gateway.hosted_room_messaging_approvals import pending_approvals_for_room
+
+            pending = await asyncio.to_thread(pending_approvals_for_room, self.backend, current)
+            await self.fresh_room()
+            if pending:
+                actions.insert(0, (text("approvals"), ("approvals", None)))
+        if view == "bots":
+            actions[:0] = [
+                (choice["label"], ("bot", choice["value"])) for choice in bot_choices
+            ]
         if view != "room":
             actions.append((text("activity"), ("room", None)))
         if view != "bots" and current.get("members"):
             actions.append((text("bots"), ("bots", None)))
         actions.append((text("back_groups"), ("groups", None)))
+        current = await self.fresh_room()
+        if bot_choices is not None:
+            # Room identity alone cannot detect a roster change during disclosure.
+            fresh_choices = await asyncio.to_thread(
+                room_bot_picker_choices, self.backend, current,
+            )
+            verified = await self.fresh_room()
+            if fresh_choices != bot_choices or verified.get("members") != current.get("members"):
+                raise PermissionError("denied")
+        return self.page(detail, actions, full_width=view == "bots")
+
+    async def approval_page(self, position=0):
+        from gateway.group_home_consent import _disclosure_stamp
+        from gateway.hosted_room_messaging_approvals import (
+            approval_picker_choices, format_approval_picker_title,
+            pending_approvals_for_room,
+        )
+
+        current = await self.fresh_room()
+        if not self.runner._can_approve_group_chats(self.event):
+            return self.runner._group_chat_approval_denial()
+        stamp = _disclosure_stamp(self.runner, self.event)
+        pending = await asyncio.to_thread(pending_approvals_for_room, self.backend, current)
         await self.fresh_room()
-        return self.page(detail, actions)
+        position = min(max(0, position), max(0, len(pending) - 1))
+        choices = approval_picker_choices(current, pending, selection=position + 1)
+        self.approval_callback = self.runner._group_chat_approval_callback(
+            self.event, self.backend, self.reference, disclosure_stamp=stamp,
+        )
+        if choices:
+            title = format_approval_picker_title(current, [pending[position]])
+            if len(pending) > 1:
+                title = text("approval_position", current=position + 1, total=len(pending)) + "\n" + title
+        else:
+            title = text("no_approvals")
+        actions = [(choice["label"], ("approval_decision", choice["value"])) for choice in choices]
+        if position:
+            actions.append((text("approval_previous"), ("approvals", position - 1)))
+        if position + 1 < len(pending):
+            actions.append((text("approval_next"), ("approvals", position + 1)))
+        actions.append((text("group_chat"), ("room", None)))
+        # Never use the general page helper's clipping for an actionable command.
+        if len(title) > 2048:
+            raise ValueError("Approval details exceed the page limit")
+        return self.page(title, actions, full_width=True)
 
     async def room_content_actions(self, current):
         """Only offer content known to exist; navigation never waits on delivery."""
@@ -722,6 +794,15 @@ class FilesMenu:
             if not _rate(self.runner, self.source_key, "read"):
                 return text("rate")
             kind, data = action
+            if kind == "approvals":
+                return await self.approval_page(data or 0)
+            if kind == "approval_decision":
+                await self.fresh_room()
+                if self.approval_callback is None:
+                    return text("expired")
+                result = await self.approval_callback(chat_id, data)
+                await self.fresh_room()
+                return self.page(result, [(text("group_chat"), ("room", None))])
             if kind == "file":
                 return await self.prepare_file(*data)
             if kind == "reply":
@@ -752,17 +833,8 @@ class FilesMenu:
                     [(text("show_latest"), ("files", None)),
                      (text("back"), ("files", None))],
                 )
-            if kind == "bots":
-                from gateway.hosted_room_messaging import format_room_bot_list
-
-                current = await self.fresh_room()
-                detail = await asyncio.to_thread(
-                    format_room_bot_list,
-                    self.backend,
-                    current,
-                    room_command=self.command,
-                )
-                return await self.room_page(detail, view="bots")
+            if kind in {"bots", "bot"}:
+                return await self.room_page(view=kind, bot_query=data)
             if kind == "groups":
                 from gateway.hosted_room_messaging import format_room_list, room_picker_choices
 
@@ -794,6 +866,8 @@ class FilesMenu:
         except TimeoutError:
             return text("expired")
         except Exception as exc:
+            if action[0] in {"bots", "bot"}:
+                return _error(exc)
             return self.failure(exc, action)
 
     async def reply_action(self):

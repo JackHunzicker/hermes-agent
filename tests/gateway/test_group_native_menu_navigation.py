@@ -1,5 +1,7 @@
 """Native Group Chat navigation retains the canonical picker and useful actions."""
 
+import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -44,6 +46,26 @@ async def test_detail_bots_back_uses_canonical_status_labels_and_layout(consumer
     menu.command = command
     detail = await menu.room_page()
     bots = await menu.choose("chat", token(menu, detail, "bots"))
+    expected_bots = rooms.room_bot_picker_choices(menu.backend, await menu.fresh_room())
+    bot_rows = [c for c in bots.choices if menu.actions[c["value"]][0] == "bot"]
+    assert [c["label"] for c in bot_rows] == [c["label"] for c in expected_bots]
+    assert all(c["full_width"] for c in bot_rows)
+    assert [menu.actions[c["value"]][1] for c in bot_rows] == [
+        c["value"] for c in expected_bots
+    ]
+    # Roster order must not retarget a native participant selection.
+    state = consumer[0]
+    with sqlite3.connect(state.db) as conn:
+        conn.execute("UPDATE hosted_rooms SET members_json=? WHERE room_id='room-1'",
+                     (json.dumps(list(reversed(state.room["members"]))),))
+    bot_detail = await menu.choose("chat", bot_rows[0]["value"])
+    assert bot_detail.title == rooms.format_room_bot_detail(
+        menu.backend, await menu.fresh_room(), expected_bots[0]["value"], room_command=command,
+    )
+    assert f"{command} 1 send @reviewer" in bot_detail.title
+    bots = await menu.choose("chat", token(menu, bot_detail, "bots"))
+    activity = await menu.choose("chat", token(menu, bots, "room"))
+    bots = await menu.choose("chat", token(menu, activity, "bots"))
     catalog = await menu.choose("chat", token(menu, bots, "groups"))
     expected = rooms.room_picker_choices(menu.backend, await menu.fresh_room())
     assert [c["label"] for c in catalog.choices] == [c["label"] for c in expected]
@@ -52,6 +74,103 @@ async def test_detail_bots_back_uses_canonical_status_labels_and_layout(consumer
     reopened = await menu.choose("chat", catalog.choices[0]["value"])
     assert isinstance(reopened, ChoicePage)
     assert menu.reference == "1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    "wrong_chat", "stale_action", "expired", "source", "adapter", "permission",
+    "authority", "removed_room", "removed_member", "member_during_detail",
+    "member_during_navigation", "member_during_list", "member_during_recheck",
+    "authority_during_recheck",
+])
+async def test_nested_bot_navigation_rejects_changed_scope(consumer, monkeypatch, change):
+    menu = await menu_for(consumer)
+    state, runner, adapter = consumer
+    detail = await menu.room_page()
+    selected = token(menu, detail, "bots")
+    if change != "member_during_list":
+        bots = await menu.choose("chat", selected)
+        selected = token(menu, bots, "bot")
+
+    def update_room(statement, parameters=()):
+        with sqlite3.connect(state.db) as conn:
+            conn.execute(statement, parameters)
+
+    def remove_member():
+        update_room("UPDATE hosted_rooms SET members_json=? WHERE room_id='room-1'",
+                    (json.dumps(state.room["members"][1:]),))
+
+    def change_authority():
+        update_room("UPDATE hosted_rooms SET authority_epoch=authority_epoch+1")
+
+    def during_read(name, mutate=remove_member, *, on_call=1):
+        original = getattr(rooms, name)
+        calls = 0
+
+        def changed(*args, **kwargs):
+            nonlocal calls
+            result = original(*args, **kwargs)
+            calls += 1
+            if calls == on_call:
+                mutate()
+            return result
+
+        monkeypatch.setattr(rooms, name, changed)
+
+    original_navigation = menu.room_content_actions
+
+    async def changed_navigation(current):
+        actions = await original_navigation(current)
+        remove_member()
+        return actions
+
+    changes = {
+        "stale_action": lambda: menu.page(detail.title, [(files.text("back"), ("room", None))]),
+        "expired": lambda: setattr(menu, "deadline", 0),
+        "source": lambda: setattr(menu.event.source, "thread_id", "different-topic"),
+        "adapter": lambda: setattr(runner, "adapter", type(adapter)()),
+        "permission": lambda: runner.config.platforms[Platform.SIGNAL].extra.update(
+            allow_admin_from=["other"],
+        ),
+        "authority": change_authority,
+        "removed_room": lambda: update_room("DELETE FROM hosted_rooms WHERE room_id='room-1'"),
+        "removed_member": remove_member,
+        "member_during_detail": lambda: during_read("format_room_bot_detail"),
+        "member_during_list": lambda: during_read("format_room_bot_list"),
+        "member_during_recheck": lambda: during_read("room_bot_picker_choices", on_call=2),
+        "authority_during_recheck": lambda: during_read(
+            "room_bot_picker_choices", change_authority, on_call=2,
+        ),
+        "member_during_navigation": lambda: monkeypatch.setattr(
+            menu, "room_content_actions", changed_navigation,
+        ),
+    }
+    if change in changes:
+        changes[change]()
+    chat = "other-chat" if change == "wrong_chat" else "chat"
+    result = await menu.choose(chat, selected)
+    rendered = result.title if isinstance(result, ChoicePage) else result
+    assert "reviewer" not in rendered and "send @" not in rendered
+    assert rendered in {files.text("denied"), files.text("expired"), files.text("error")}
+    assert not adapter.documents and not adapter.notices
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", ["bots", "bot"])
+async def test_nested_bot_read_failure_uses_safe_text_without_execution_controls(consumer, monkeypatch, view):
+    menu = await menu_for(consumer)
+    page = await menu.room_page()
+    if view == "bot":
+        page = await menu.choose("chat", token(menu, page, "bots"))
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("private backend diagnostic")
+
+    monkeypatch.setattr(rooms, "format_room_bot_detail" if view == "bot" else "format_room_bot_list",
+                        unavailable)
+    result = await menu.choose("chat", token(menu, page, view))
+    assert result == files.text("error")
+    assert not consumer[2].documents and not consumer[2].notices
 
 
 @pytest.mark.asyncio
@@ -98,8 +217,12 @@ async def test_telegram_real_callback_roundtrip_preserves_full_width_picker(cons
         {"choice_pages": True, "requester_user_id": "user-1"},
     )
     markup = adapter._send_message_with_thread_fallback.await_args.kwargs["reply_markup"]
-    for caption in (files.text("bots"), files.text("back_groups")):
+    expected_bots = rooms.room_bot_picker_choices(menu.backend, await menu.fresh_room())
+    for caption in (files.text("bots"), expected_bots[0]["label"],
+                    files.text("bots"), files.text("back_groups")):
         button = next(b for row in markup.inline_keyboard for b in row if b.text == caption)
+        if caption == expected_bots[0]["label"]:
+            assert all(len(row) == 1 for row in markup.inline_keyboard)
         query = _query()
         await adapter._handle_choice_picker_callback(query, button.callback_data, "chat-1")
         markup = query.edit_message_text.await_args.kwargs["reply_markup"]

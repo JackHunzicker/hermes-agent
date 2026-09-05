@@ -265,6 +265,51 @@ afterEach(async () => {
 })
 
 describe('classic Desktop mailbox with the real room engine', () => {
+  it('keeps cold-start sends pending until discovery completes while Stop remains available', async () => {
+    const loaded = await load({ turn: () => 'Ready after discovery' })
+    seed(loaded)
+    const remoteMembers: GroupMember[] = [{ name: 'reviewer', connectionId: 'gateway-a', remoteSource: true }]
+    loaded.chat.updateGroupChat('Workshop', current => ({ ...current, members: remoteMembers }))
+    const data = await import('./data')
+    data.$lastRoster.set(remoteMembers)
+    loaded.mailbox.queue({
+      action: 'send', command_id: 'cold:send', room_id: 'room-1',
+      payload: { message: '@reviewer Reply once', recipients: remoteMembers }
+    })
+    const request = host.requestProfile as (route: ProfileRoute, method: string, params: Record<string, unknown>) => Promise<unknown>
+
+    host.requestProfile = (route: ProfileRoute, method: string, params: Record<string, unknown>) => {
+      if (method === 'groups.capabilities') {
+        return Promise.reject(Object.assign(new Error('older gateway'), { code: -32601 }))
+      }
+
+      return request(route, method, params)
+    }
+
+    const storage = scriptedStorage(loaded.gateway.storage).storage
+    await loaded.runtime.startDesktopRoomCommandRuntime(storage)
+    await vi.advanceTimersByTimeAsync(150_000)
+    expect(loaded.mailbox.commands.get('cold:send')).toMatchObject({ state: 'pending' })
+    expect(loaded.mailbox.commands.get('cold:send')?.attempts || 0).toBe(0)
+    expect(loaded.gateway.rpcFor('prompt.submit')).toHaveLength(0)
+    expect(loaded.mailbox.calls.some(call => call.method === 'groups.desktop.claim' &&
+      (call.params.actions as string[])?.includes('stop'))).toBe(true)
+
+    const hosted = await import('./hosted-room-runtime')
+
+    try {
+      await hosted.startHostedRoomRuntime(storage)
+      expect(hosted.groupChatContinuityReady(loaded.chat.$groupChats.get().Workshop)).toBe(true)
+      await loaded.runtime.startDesktopRoomCommandRuntime(storage)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(loaded.mailbox.commands.get('cold:send')).toMatchObject({ state: 'completed', attempts: 1 })
+      expect(loaded.gateway.rpcFor('prompt.submit')).toHaveLength(1)
+    } finally {
+      hosted.stopHostedRoomRuntime()
+      loaded.runtime.stopDesktopRoomCommandRuntime()
+    }
+  })
+
   const reviewState = (loaded: Loaded) => structuredClone(Object.fromEntries(
     Object.entries(loaded.chat.$groupChats.get()).map(([name, room]) => [name, {
       log: room.log, epoch: room.epoch, running: room.running, turn: room.turn,

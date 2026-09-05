@@ -159,7 +159,7 @@ export default {
           renameGroupChat(oldName, newName, members, {
             hostedAlreadyRenamed: true
           })
-      })
+      }).then(startDesktopRoomCommands, () => undefined)
 
       if (unbindDesktopRoomRetry === null && typeof host.onEvent === 'function') {
         unbindDesktopRoomRetry = host.onEvent('desktop_rooms.commands.pending', startDesktopRoomCommands)

@@ -1420,6 +1420,13 @@ def format_room_detail(
                 status_text = "needs attention"
             else:
                 status_text = "idle"
+    from gateway.hosted_room_messaging_approvals import format_pending_approvals
+
+    approval_section = format_pending_approvals(
+        service, room, room_reference=str(room_reference(room)), room_command=room_command,
+    ) if show_approvals else ""
+    if approval_section and status_text != "stopping":
+        status_text = "waiting for your approval"
     lines = [
         f"💬 **{_plain_display_label(name, limit=72)}**",
         f"{_room_status_icon(status_text)} {status_text}",
@@ -1451,17 +1458,8 @@ def format_room_detail(
             )
     else:
         lines.extend(["", "No messages yet."])
-    from gateway.hosted_room_messaging_approvals import format_pending_approvals
-
-    if show_approvals:
-        approval_section = format_pending_approvals(
-            service,
-            room,
-            room_reference=str(room_reference(room)),
-            room_command=room_command,
-        )
-        if approval_section:
-            lines.extend(["", approval_section])
+    if approval_section:
+        lines.extend(["", approval_section])
     failed_commands = int(room.get("desktop_failed_commands") or 0)
     show_retry, show_stop, unconfirmed = _room_action_flags(
         service,

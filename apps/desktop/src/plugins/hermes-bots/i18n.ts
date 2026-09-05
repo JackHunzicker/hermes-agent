@@ -295,8 +295,11 @@ type BotsMessages = {
     newThreadPlaceholder: (group: string) => string
     everyoneMeta: string
     commandApproval: string
+    approvalChoices: { once: string; session: string; always: string; deny: string }
+    submitDecision: string
+    submittingDecision: string
     answerFailed: (handle: string, error: string) => string
-    wantsToRunCommand: (handle: string) => string
+    wantsToRunCommand: (name: string) => string
     asks: (handle: string) => string
     answerTo: (member: string) => string
   }
@@ -606,8 +609,16 @@ const en: BotsMessages = {
     newThreadPlaceholder: group => `New thread in ${group}… (@name to direct, @everyone for all)`,
     everyoneMeta: 'Every bot in the room',
     commandApproval: 'command approval',
+    approvalChoices: {
+      once: 'Allow once',
+      session: 'Allow this session',
+      always: 'Always allow',
+      deny: 'Deny'
+    },
+    submitDecision: 'Submit decision',
+    submittingDecision: 'Submitting decision…',
     answerFailed: (handle, error) => `Could not send the answer to @${handle}: ${error}`,
-    wantsToRunCommand: handle => `@${handle} wants to run a command:`,
+    wantsToRunCommand: name => `${name} wants to run a command:`,
     asks: handle => `@${handle} asks:`,
     answerTo: member => `Answer @${member}`
   },
@@ -911,8 +922,16 @@ const ja: BotsMessages = {
     newThreadPlaceholder: group => `${group}で新しいスレッド…（@名前で個別、@everyoneで全員）`,
     everyoneMeta: 'ルーム内のすべてのボット',
     commandApproval: 'コマンドの承認',
+    approvalChoices: {
+      once: '一度だけ許可',
+      session: 'このセッションで許可',
+      always: '常に許可',
+      deny: '拒否'
+    },
+    submitDecision: '判断を送信',
+    submittingDecision: '判断を送信中…',
     answerFailed: (handle, error) => `@${handle}に回答を送信できませんでした: ${error}`,
-    wantsToRunCommand: handle => `@${handle}がコマンドを実行しようとしています:`,
+    wantsToRunCommand: name => `${name}がコマンドを実行しようとしています:`,
     asks: handle => `@${handle}からの質問:`,
     answerTo: member => `@${member}に回答`
   },
@@ -1211,8 +1230,16 @@ const zh: BotsMessages = {
     newThreadPlaceholder: group => `在 ${group} 中开启新讨论串…（@名称指定，@everyone 全体）`,
     everyoneMeta: '房间里的所有机器人',
     commandApproval: '命令批准',
+    approvalChoices: {
+      once: '允许一次',
+      session: '允许本会话',
+      always: '始终允许',
+      deny: '拒绝'
+    },
+    submitDecision: '提交决定',
+    submittingDecision: '正在提交决定…',
     answerFailed: (handle, error) => `无法将回答发送给 @${handle}：${error}`,
-    wantsToRunCommand: handle => `@${handle} 想执行一个命令：`,
+    wantsToRunCommand: name => `${name} 想执行一个命令：`,
     asks: handle => `@${handle} 的提问：`,
     answerTo: member => `回答 @${member}`
   },
@@ -1511,8 +1538,16 @@ const zhHant: BotsMessages = {
     newThreadPlaceholder: group => `在 ${group} 中開啟新討論串…（@名稱指定，@everyone 全體）`,
     everyoneMeta: '房間裡的所有機器人',
     commandApproval: '命令核准',
+    approvalChoices: {
+      once: '允許一次',
+      session: '允許本工作階段',
+      always: '一律允許',
+      deny: '拒絕'
+    },
+    submitDecision: '提交決定',
+    submittingDecision: '正在提交決定…',
     answerFailed: (handle, error) => `無法將回答傳送給 @${handle}：${error}`,
-    wantsToRunCommand: handle => `@${handle} 想執行一個命令：`,
+    wantsToRunCommand: name => `${name} 想執行一個命令：`,
     asks: handle => `@${handle} 的提問：`,
     answerTo: member => `回覆 @${member}`
   },
@@ -1572,6 +1607,15 @@ export const BOTS_LOCALES: PluginLocaleBundles = {
   ar: {
     group: {
       attachedFile: 'ملف مرفق',
+      approvalChoices: {
+        once: 'السماح مرة واحدة',
+        session: 'السماح لهذه الجلسة',
+        always: 'السماح دائماً',
+        deny: 'رفض'
+      },
+      submitDecision: 'إرسال القرار',
+      submittingDecision: 'جارٍ إرسال القرار…',
+      wantsToRunCommand: (name: string) => `${name} يريد تشغيل أمر:`,
       downloadFile: (name: string) => `تنزيل ${name}`,
       attachmentDownloadFailed: 'تعذر تنزيل هذا المرفق.',
       sharedFiles: 'الملفات',
@@ -1603,6 +1647,15 @@ export const BOTS_LOCALES: PluginLocaleBundles = {
   ru: {
     group: {
       attachedFile: 'вложенный файл',
+      approvalChoices: {
+        once: 'Разрешить один раз',
+        session: 'Разрешить в этом сеансе',
+        always: 'Всегда разрешать',
+        deny: 'Отклонить'
+      },
+      submitDecision: 'Отправить решение',
+      submittingDecision: 'Отправка решения…',
+      wantsToRunCommand: (name: string) => `${name} хочет выполнить команду:`,
       downloadFile: (name: string) => `Скачать ${name}`,
       attachmentDownloadFailed: 'Не удалось скачать это вложение.',
       sharedFiles: 'Файлы',

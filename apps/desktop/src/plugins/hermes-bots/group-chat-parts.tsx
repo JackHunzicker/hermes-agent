@@ -375,9 +375,11 @@ interface GroupClarifyCardProps {
  *    closed choice. Answer sends via the member's own source. */
 export function GroupClarifyCard({ entry, members }: GroupClarifyCardProps) {
   const b = useBots()
+  const allMeta = useValue($botMeta)
   const { group } = entry
   const isApproval = entry.kind === 'approval'
   const member = members.find(m => groupMemberKey(m) === entry.memberKey) || members.find(m => m.name === entry.member)
+  const approvalLabels = new Map(Object.entries(b.group.approvalChoices))
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [picked, setPicked] = useState<Record<string, string[]>>({})
   const [sending, setSending] = useState(false)
@@ -476,7 +478,9 @@ export function GroupClarifyCard({ entry, members }: GroupClarifyCardProps) {
       <div className="flex items-center gap-1.5 text-xs font-medium">
         <Codicon className="shrink-0 text-(--ui-accent)" name={isApproval ? 'shield' : 'question'} />
         {isApproval
-          ? b.group.wantsToRunCommand(botHandle(entry.member, member))
+          ? b.group.wantsToRunCommand(
+              member ? displayName(member, botRosterMeta(member, allMeta)) : `@${botHandle(entry.member)}`
+            )
           : b.group.asks(botHandle(entry.member, member))}
       </div>
       {isApproval && entry.command ? (
@@ -524,7 +528,7 @@ export function GroupClarifyCard({ entry, members }: GroupClarifyCardProps) {
                     size="sm"
                     variant={chosen ? 'default' : 'secondary'}
                   >
-                    {choice}
+                    {isApproval ? (approvalLabels.get(choice) ?? choice) : choice}
                   </Button>
                 )
               })}
@@ -566,7 +570,13 @@ export function GroupClarifyCard({ entry, members }: GroupClarifyCardProps) {
       ))}
       <div className="flex justify-end">
         <Button disabled={sending || !allAnswered || !member} onClick={() => void submit()} size="sm">
-          {sending ? 'Sending…' : isApproval ? 'Respond' : 'Answer'}
+          {isApproval
+            ? sending
+              ? b.group.submittingDecision
+              : b.group.submitDecision
+            : sending
+              ? 'Sending…'
+              : 'Answer'}
         </Button>
       </div>
     </div>

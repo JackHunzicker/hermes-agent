@@ -677,7 +677,7 @@ def test_approval_display_neutralizes_markup_shaped_bot_and_command_text(tmp_pat
     assert "［Admin］(url) ＠all" in rendered
     assert "Command: rm -rf /" in rendered
     assert choices[0]["label"].startswith(
-        "✓ 1. Approve once · ［Admin］(url) ＠all · member-1"
+        "✓ Allow once"
     )
     title = approvals.format_approval_picker_title(room, [pending])
     assert "＊＊Approve＊＊ ［open］(https://example.test) ＠all" in title
@@ -738,9 +738,9 @@ def test_native_buttons_distinguish_duplicate_names_with_index_and_handle(tmp_pa
     ]
 
     assert labels == [
-        "✓ 1. Approve once · Reviewer · ＠alpha",
+        "✓ 1. Allow once · Reviewer · ＠alpha",
         "✕ 1. Deny · Reviewer · ＠alpha",
-        "✓ 2. Approve once · Reviewer · ＠beta",
+        "✓ 2. Allow once · Reviewer · ＠beta",
         "✕ 2. Deny · Reviewer · ＠beta",
     ]
 

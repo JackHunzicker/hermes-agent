@@ -327,6 +327,55 @@ class GroupChatSlashCommandsMixin:
             "(https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode/#groups-and-group-chats)",
         ])
 
+    def _group_chat_approval_callback(self, event, service, reference, *, disclosure_stamp=None):
+        """Share the same fenced decision path across native menu entry points."""
+        from functools import partial
+        from gateway.group_home_consent import DisclosureChanged, _disclosure_stamp, disclosed_call
+        from gateway.hosted_room_messaging import (
+            list_messaging_rooms, messaging_event_id, resolve_room,
+        )
+        from gateway.hosted_room_messaging_approvals import (
+            MessagingApprovalError, approval_member_label, pending_approvals_for_room,
+            resolve_approval_picker_choice, submit_room_approval,
+        )
+
+        profile = self._group_chat_profile(event)
+        stamp = _disclosure_stamp(self, event) if disclosure_stamp is None else disclosure_stamp
+        read = partial(disclosed_call, self, event, stamp)
+
+        @protect_group_callback(self, event)
+        async def selected(_chat_id, value):
+            if not self._can_approve_group_chats(event):
+                return self._group_chat_approval_denial()
+            if denial := self._group_chat_rate_limit_denial(event, action="approve"):
+                return denial
+            try:
+                current_rooms = await read(list_messaging_rooms, service, profile=profile)
+                room = resolve_room(current_rooms, reference)
+                pending = await read(pending_approvals_for_room, service, room)
+                index, choice, request_id = resolve_approval_picker_choice(room, pending, value)
+                _number, action, applied = await read(
+                    submit_room_approval, service, room,
+                    command_id=f"approval:{messaging_event_id(event)}:{str(value).replace('=', '.')}",
+                    choice=choice,
+                    installation_owner_authorized=self._can_approve_group_chats(event),
+                    selection=index, expected_request_id=request_id,
+                    _work_action="approve" if choice == "once" else "deny",
+                )
+                bot = approval_member_label(room, str(action["member_id"]))
+                if applied.get("applied") is False:
+                    return str(applied.get("result") or "Approval expired.")
+                if applied.get("queued"):
+                    return f"Decision sent for {bot}."
+                return f"Allowed once for {bot}." if choice == "once" else f"Denied for {bot}."
+            except (MessagingApprovalError, DisclosureChanged) as exc:
+                return str(exc)
+            except Exception:
+                logger.exception("Failed to apply Group Chat approval")
+                return "Couldn’t apply that approval. Check the Group Chat again."
+
+        return selected
+
     @protect_group_result
     async def _handle_rooms_command(self, event: MessageEvent) -> Optional[str]:
         """List Bot Group Chats or show one chat's recent activity."""
@@ -413,14 +462,10 @@ class GroupChatSlashCommandsMixin:
                 if not self._can_approve_group_chats(event):
                     return self._group_chat_approval_denial()
                 from gateway.hosted_room_messaging_approvals import (
-                    MessagingApprovalError,
-                    approval_member_label,
                     approval_picker_choices,
                     format_approval_picker_title,
                     format_pending_approvals,
                     pending_approvals_for_room,
-                    resolve_approval_picker_choice,
-                    submit_room_approval,
                 )
 
                 room = resolve_room(rooms, words[0])
@@ -438,76 +483,14 @@ class GroupChatSlashCommandsMixin:
                 )
                 session_key = self._session_key_for_source(source)
 
-                @protect_group_callback(self, event)
-                async def _on_approval_selected(_chat_id: str, value: str) -> str:
-                    if not self._can_approve_group_chats(event):
-                        return self._group_chat_approval_denial()
-                    current_denial = self._group_chat_rate_limit_denial(
-                        event,
-                        action="approve",
-                    )
-                    if current_denial:
-                        return current_denial
-                    try:
-                        current_rooms = await read(
-                            list_messaging_rooms,
-                            service,
-                            profile=profile,
-                        )
-                        current_room = resolve_room(current_rooms, words[0])
-                        current_pending = await read(
-                            pending_approvals_for_room,
-                            service,
-                            current_room,
-                        )
-                        index, choice, request_id = resolve_approval_picker_choice(
-                            current_room,
-                            current_pending,
-                            value,
-                        )
-                        _number, selected, applied = await read(
-                            submit_room_approval,
-                            service,
-                            current_room,
-                            command_id=(
-                                f"approval:{messaging_event_id(event)}:"
-                                f"{str(value).replace('=', '.')}"
-                            ),
-                            choice=choice,
-                            installation_owner_authorized=(
-                                self._can_approve_group_chats(event)
-                            ),
-                            selection=index,
-                            expected_request_id=request_id,
-                            _work_action="approve" if choice == "once" else "deny",
-                        )
-                        bot = approval_member_label(
-                            current_room,
-                            str(selected["member_id"]),
-                        )
-                        if applied.get("applied") is False:
-                            return str(applied.get("result") or "Approval expired.")
-                        if applied.get("queued"):
-                            return f"Decision sent for {bot}."
-                        return (
-                            f"Approved once for {bot}."
-                            if choice == "once"
-                            else f"Denied for {bot}."
-                        )
-                    except (MessagingApprovalError, DisclosureChanged) as exc:
-                        return str(exc)
-                    except Exception:
-                        logger.exception("Failed to apply Group Chat approval")
-                        return (
-                            "Couldn’t apply that approval. Check the Group Chat again."
-                        )
-
                 picker_sent = bool(choices) and await self._try_send_group_choice_picker(
                     event,
                     session_key,
                     title=format_approval_picker_title(room, pending),
                     choices=choices,
-                    on_choice_selected=_on_approval_selected,
+                    on_choice_selected=self._group_chat_approval_callback(
+                        event, service, words[0], disclosure_stamp=disclosure_stamp,
+                    ),
                     disclosure_stamp=disclosure_stamp,
                 )
                 if picker_sent:

@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => ({
   scheduleGroupChatServerSync: vi.fn(),
   startDesktopRoomCommandRuntime: vi.fn(async (_storage: PluginContext['storage']): Promise<void> => undefined),
   sessionOwnsWorkspace: vi.fn(() => false),
-  startHostedRoomRuntime: vi.fn(async () => undefined),
+  startHostedRoomRuntime: vi.fn(async (): Promise<void> => undefined),
   stopHostedRoomRuntime: vi.fn(),
   stopDesktopRoomCommandRuntime: vi.fn(),
   setWorkspaceScope: vi.fn()
@@ -255,9 +255,11 @@ describe('hosted Group Chat startup', () => {
     recovered.dispose()
   })
 
-  it('retries two failed mailbox starts on existing push signals without polling', async () => {
+  it('retries failed mailbox starts after discovery and on push signals without polling', async () => {
     paneStores()
     let pending!: () => void
+    let discovered!: () => void
+    mocks.startHostedRoomRuntime.mockImplementationOnce(() => new Promise<void>(resolve => { discovered = resolve }))
     mocks.onEvent.mockImplementation((name: string, callback: (event?: unknown) => void) => {
       if (name === 'desktop_rooms.commands.pending') {
         pending = callback as () => void
@@ -277,7 +279,7 @@ describe('hosted Group Chat startup', () => {
     await settle()
     expect(mocks.startDesktopRoomCommandRuntime).toHaveBeenCalledTimes(1)
 
-    pending()
+    discovered()
     await settle()
     expect(mocks.startDesktopRoomCommandRuntime).toHaveBeenCalledTimes(2)
     pending()

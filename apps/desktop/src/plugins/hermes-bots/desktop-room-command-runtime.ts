@@ -26,6 +26,7 @@ import type { DesktopCommandResult } from './group-command-receipts'
 import { classicAuthorityClaim } from './group-desktop-authority'
 import { groupChatBotsFromDescriptors, groupChatMemberBots } from './group-membership'
 import { cancelGroupThreadForLeaseLoss, sendToGroupChat, stopGroupThread } from './group-rounds'
+import { groupChatContinuityReady } from './hosted-room-runtime'
 import type { GroupMember, ProfileRoute } from './types'
 
 const DESKTOP_ROOM_COMMAND_INTERVAL_MS = 60_000
@@ -77,7 +78,7 @@ function desktopRoomEntry(roomId: string, descriptors: DesktopRoomDescriptor[]) 
     : null
 }
 
-function desktopCommandEligibleRooms() {
+function desktopCommandEligibleRooms(forSend = false) {
   return Object.fromEntries(
     Object.entries($groupChats.get()).filter(([, room]) => {
       if (groupChatHostedGateway(room) || room?.tombstone) {
@@ -85,6 +86,10 @@ function desktopCommandEligibleRooms() {
       }
 
       if (!classicAuthorityClaim(room)) {
+        return false
+      }
+
+      if (forSend && !groupChatContinuityReady(room)) {
         return false
       }
 
@@ -123,7 +128,8 @@ async function requestDesktopCommandGateway(route: ProfileRoute, method: string,
   }
 
   if (method === 'groups.desktop.claim' || method === 'groups.desktop.presence') {
-    const expected = desktopRoomDescriptors(desktopCommandEligibleRooms())
+    const forSend = method === 'groups.desktop.claim' && Array.isArray(params.actions) && params.actions.includes('send')
+    const expected = desktopRoomDescriptors(desktopCommandEligibleRooms(forSend))
     await persistDesktopCommandState()
 
     if (!currentDesktopRuntime(String(params.consumer_id)) || desktopRoomPersistenceBlocked) {
@@ -131,7 +137,7 @@ async function requestDesktopCommandGateway(route: ProfileRoute, method: string,
     }
 
     // An async storage read must not authorize a replaced/conflicted room.
-    const current = desktopRoomDescriptors(desktopCommandEligibleRooms())
+    const current = desktopRoomDescriptors(desktopCommandEligibleRooms(forSend))
     const authorities = Array.isArray(params.room_authorities) ? params.room_authorities : []
 
     const valid = authorities.filter(raw => {
@@ -351,6 +357,10 @@ export async function executeDesktopRoomCommand(
 
       for (let driveAttempt = 1; driveAttempt <= DESKTOP_ROOM_DRIVE_ATTEMPTS_PER_CLAIM; driveAttempt += 1) {
         assertCurrentRoom()
+
+        if (!groupChatContinuityReady($groupChats.get()[group])) {
+          throw retryableDesktopRoomCommand('Waiting for this Group Chat to finish reconnecting.')
+        }
 
         if (localAbort.signal.aborted) {
           throw retryableDesktopRoomCommand('The command moved to another Desktop.')
@@ -690,7 +700,7 @@ async function runDesktopRoomCommandPump(targetConnectionIds: null | Set<string>
       return
     }
 
-    const rooms = desktopCommandEligibleRooms()
+    const rooms = desktopCommandEligibleRooms(true)
 
     if (!Object.keys(rooms).length) {
       syncDesktopRoomCommandRetention([])
@@ -839,6 +849,10 @@ export async function startDesktopRoomCommandRuntime(storage?: PluginContext['st
         scheduleDesktopRoomCommandPump()
         void refreshDesktopRoomCommandPresence()
       }
+    }
+
+    if (!desktopRoomCommandDisposed && !desktopRoomPersistenceBlocked) {
+      scheduleDesktopRoomCommandPump()
     }
 
     return

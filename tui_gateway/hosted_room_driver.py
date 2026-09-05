@@ -730,7 +730,7 @@ class HostedRoomRuntime:
         profile, submit_attempted = task["payload"]["target_profile"], False
         transport = None
         attachment_staging_active = False
-        attachment_session_id = None
+        attachment_session_id = session_id = None
         with self._status_lock:
             self._current_tasks[binding.room_id] = attempt.identity
         try:
@@ -817,13 +817,8 @@ class HostedRoomRuntime:
                     transport=transport, profile=profile, session_id=attachment_session_id,
                     execution_generation=attempt.execution_generation, submit_attempted=submit_attempted,
                     not_admitted=bool(getattr(exc, "not_admitted", False)) or fresh_preflight_failure)
-            if local_transport_unavailable or (
-                submit_attempted
-                and (
-                    bool(getattr(exc, "not_admitted", False))
-                    or fresh_preflight_failure
-                )
-            ):
+            if (local_transport_unavailable or bool(getattr(exc, "not_admitted", False))
+                    or (submit_attempted and fresh_preflight_failure)):
                 try:
                     if task.get("payload", {}).get("target_member_id"):
                         deferred = state.defer_not_admitted_task(
@@ -848,6 +843,13 @@ class HostedRoomRuntime:
             else:
                 self._settle_failure_if_current(attempt, exc)
         finally:
+            if transport is self.rpc and session_id is not None:
+                retire_idle = getattr(transport, "retire_idle", None)
+                if callable(retire_idle):
+                    try:
+                        retire_idle(session_id=session_id)
+                    except Exception:
+                        self._record_error("Unused hosted session reservation could not be retired")
             with self._status_lock:
                 self._current_tasks.pop(binding.room_id, None)
                 # The task may have published a reply or exposed the next turn while this
