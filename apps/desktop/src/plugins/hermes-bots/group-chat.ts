@@ -12,6 +12,7 @@
 import { atom, host } from '@hermes/plugin-sdk'
 
 import { $botMeta, $lastRoster } from './data'
+import { boundedDesktopCommandSettled } from './group-command-receipts'
 import {
   classicAuthorityState,
   classicDesktopAuthority,
@@ -472,7 +473,7 @@ function groupChatSyncFallbackKey(entry: GroupMessage) {
   ])
 }
 
-export { groupChatSyncSequence } from './group-message-author'
+export { boundedDesktopCommandSettled } from './group-command-receipts'
 
 function compareGroupChatSyncEntries(left: GroupMessage, right: GroupMessage) {
   const leftSeq = groupChatSyncSequence(left)
@@ -1005,6 +1006,7 @@ export function durableGroupChatRooms(all: Record<string, GroupChat> = $groupCha
       sessions: room.sessions || {},
       sessionOwners: room.sessionOwners || {},
       holds: room.holds || {},
+      desktopCommandSettled: boundedDesktopCommandSettled(room.desktopCommandSettled),
       stranded: room.stranded || {},
       members: Array.isArray(room.members) ? room.members : [],
       // Immutable room identity: without this, a room merged in via the
@@ -1062,10 +1064,8 @@ export async function persistGroupChatRoomsRequired(
   }
 }
 
-/** Register-removed sweep: annotate (not delete) every persisted group-chat
- *  member owned by the deleted connection, in the atom AND plugin storage.
- *  Writes ride updateGroupChat so the durable record keeps its full shape
- *  (sessionOwners, holds — durableGroupChatRooms would drop them).
+/** Annotate members of a removed connection in the atom and plugin storage.
+ *  Preserve their session ownership and user Stop holds.
  *  Returns whether anything changed. */
 export function sweepGroupChatMembersForRemovedConnection(connectionId: string) {
   const id = String(connectionId || '').trim()
@@ -1655,6 +1655,7 @@ export function updateGroupChat(
         // must too — otherwise a window restart silently releases a bot the
         // user explicitly stopped.
         holds: room.holds || {},
+        desktopCommandSettled: boundedDesktopCommandSettled(room.desktopCommandSettled),
         // Source-qualified member descriptors keep the room whole when the
         // active connection changes and today's local members become remote.
         members: Array.isArray(room.members) ? room.members : [],
@@ -1686,6 +1687,8 @@ export function updateGroupChat(
 
   return next
 }
+
+export { groupChatSyncSequence } from './group-message-author'
 
 export function backfillClassicGroupAuthorities(names = Object.keys($groupChats.get())) {
   let changed = false
@@ -1783,14 +1786,18 @@ export function appendGroupChatEntry(
   text: string,
   thread?: null | string,
   images?: Attachment[],
-  entryId?: string
+  options: string | { entryId?: string; external?: boolean } = {}
 ): GroupMessage {
+  const entryId = typeof options === 'string' ? options : options.entryId || ''
+  const external = typeof options === 'object' && options.external === true
+
   let entry: GroupMessage = {
     id: entryId || groupChatEntryId(),
     at: Date.now(),
     from,
     text: normalizeGroupChatText(text),
-    thread: thread || 'legacy'
+    thread: thread || 'legacy',
+    ...(external ? { external: true } : {})
   }
 
   if (Array.isArray(images) && images.length) {

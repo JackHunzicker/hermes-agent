@@ -78,8 +78,8 @@ import {
 import type { GroupChatRoom } from './group-chat'
 import { GroupClarifyCard, GroupImageControls, GroupMentionInput } from './group-chat-parts'
 import type { GroupRoomPrompt } from './group-chat-parts'
-import { SharedFilesControl } from './group-files-view'
 import { storedClassicDesktopAuthority } from './group-desktop-authority'
+import { SharedFilesControl } from './group-files-view'
 import { GroupHoldStatus } from './group-hold-status'
 import {
   botGroups,
@@ -241,6 +241,7 @@ export async function disbandGroupChat(group: string, members: RosterRow[]) {
           sessions: room.sessions || {},
           sessionOwners: room.sessionOwners || {},
           members: Array.isArray(room.members) ? room.members : [],
+          desktopCommandSettled: room.desktopCommandSettled || {},
           roomId: typeof room.roomId === 'string' && room.roomId ? room.roomId : null,
           hosted: groupChatHostedGateway(room) || null,
           hostedEpoch: Math.max(0, Number(room.hostedEpoch || 0)) || null,

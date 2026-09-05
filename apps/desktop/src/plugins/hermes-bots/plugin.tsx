@@ -42,6 +42,7 @@ import {
   migrateBotMeta,
   resolveRosterMentions
 } from './data'
+import { startDesktopRoomCommandRuntime, stopDesktopRoomCommandRuntime } from './desktop-room-command-runtime'
 import {
   $groupChats,
   $groupChatWorkspace,
@@ -56,6 +57,7 @@ import {
   updateGroupChat
 } from './group-chat'
 import { renameGroupChat } from './group-chat-view'
+import { boundedDesktopCommandSettled } from './group-command-receipts'
 import { storedClassicDesktopAuthority } from './group-desktop-authority'
 import { groupWorkspaceOwnerKey } from './group-membership'
 import { startHostedRoomRuntime, stopHostedRoomRuntime } from './hosted-room-runtime'
@@ -109,6 +111,32 @@ export default {
     let roomServicesStarted = false
     let roomServicesDisposed = false
     let unbindGatewayListener: null | (() => void) = null
+    let unbindDesktopRoomRetry: null | (() => void) = null
+    let desktopRoomStart: null | Promise<void> = null
+    let desktopRoomRetryRequested = false
+
+    const startDesktopRoomCommands = () => {
+      if (roomServicesDisposed) {
+        return
+      }
+
+      if (desktopRoomStart) {
+        desktopRoomRetryRequested = true
+
+        return
+      }
+
+      desktopRoomStart = startDesktopRoomCommandRuntime(ctx.storage)
+        .catch(() => undefined)
+        .finally(() => {
+          desktopRoomStart = null
+
+          if (desktopRoomRetryRequested && !roomServicesDisposed) {
+            desktopRoomRetryRequested = false
+            startDesktopRoomCommands()
+          }
+        })
+    }
 
     const startRoomServices = () => {
       if (roomServicesStarted || roomServicesDisposed) {
@@ -122,6 +150,7 @@ export default {
         // transition bumps every room epoch and can cancel a startup send.
         if (!bindingGatewayListener) {
           handleSessionsGatewayTransition()
+          startDesktopRoomCommands()
         }
       })
       bindingGatewayListener = false
@@ -132,6 +161,11 @@ export default {
           })
       })
 
+      if (unbindDesktopRoomRetry === null && typeof host.onEvent === 'function') {
+        unbindDesktopRoomRetry = host.onEvent('desktop_rooms.commands.pending', startDesktopRoomCommands)
+      }
+
+      startDesktopRoomCommands()
     }
 
     startFaceClock()
@@ -148,6 +182,12 @@ export default {
       ctx.onDispose(() => {
         roomServicesDisposed = true
         stopHostedRoomRuntime()
+        stopDesktopRoomCommandRuntime()
+
+        if (unbindDesktopRoomRetry) {
+          unbindDesktopRoomRetry()
+          unbindDesktopRoomRetry = null
+        }
       })
     }
 
@@ -284,6 +324,7 @@ export default {
                   // guard as the other maps — a held bot stays held across
                   // window restarts until explicitly released.
                   holds: room.holds && typeof room.holds === 'object' ? room.holds : {},
+                  desktopCommandSettled: boundedDesktopCommandSettled(room.desktopCommandSettled),
                   members: Array.isArray(room.members) ? room.members : [],
                   roomId: typeof room.roomId === 'string' && room.roomId ? room.roomId : null,
                   hosted: typeof room.hosted === 'string' && room.hosted ? room.hosted : null,

@@ -22,17 +22,24 @@ import { atom } from 'nanostores'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as DataModule from './data'
+import { desktopCommandResult, settleDesktopCommand } from './group-command-receipts'
+import { classicAuthorityHash } from './group-desktop-authority'
 import type * as RoutingModule from './routing'
+import type { GroupChat } from './types'
 import { canonicalUser, optimisticUser, userRoom } from './user-event-test-fixtures'
 
 const mocks = vi.hoisted(() => ({
   activateClassicGroupAuthorities: vi.fn(async () => false),
   botChatOwnsWorkspace: vi.fn(() => false),
+  mailboxClaim: vi.fn(),
+  onEvent: vi.fn((_name: string, _callback: (event?: unknown) => void) => () => undefined),
   paneVisibility: vi.fn(),
   scheduleGroupChatServerSync: vi.fn(),
+  startDesktopRoomCommandRuntime: vi.fn(async (_storage: PluginContext['storage']): Promise<void> => undefined),
   sessionOwnsWorkspace: vi.fn(() => false),
   startHostedRoomRuntime: vi.fn(async () => undefined),
   stopHostedRoomRuntime: vi.fn(),
+  stopDesktopRoomCommandRuntime: vi.fn(),
   setWorkspaceScope: vi.fn()
 }))
 
@@ -43,7 +50,7 @@ vi.mock('@hermes/plugin-sdk', async importOriginal => {
     ...original,
     host: {
       ...original.host,
-      onEvent: undefined,
+      onEvent: mocks.onEvent,
       paneVisibility: mocks.paneVisibility,
       setWorkspaceScope: mocks.setWorkspaceScope
     }
@@ -57,6 +64,10 @@ vi.mock('./relay', () => ({ startBotRelay: vi.fn(), stopBotRelay: vi.fn() }))
 vi.mock('./hosted-room-runtime', () => ({
   startHostedRoomRuntime: mocks.startHostedRoomRuntime,
   stopHostedRoomRuntime: mocks.stopHostedRoomRuntime
+}))
+vi.mock('./desktop-room-command-runtime', () => ({
+  startDesktopRoomCommandRuntime: mocks.startDesktopRoomCommandRuntime,
+  stopDesktopRoomCommandRuntime: mocks.stopDesktopRoomCommandRuntime
 }))
 vi.mock('./session-sweep', () => ({ startHideSweepScheduler: vi.fn() }))
 vi.mock('./canonical-chat', () => ({ openBotCanonicalChat: vi.fn() }))
@@ -108,7 +119,10 @@ interface Registration {
 }
 
 /** A recording `PluginContext`: registrations, their disposers, teardown. */
-function recordingContext(storageGet: (key: string) => Promise<unknown> = async () => undefined) {
+function recordingContext(
+  storageGet: (key: string) => Promise<unknown> = async () => undefined,
+  storageSet: (key: string, value: unknown) => Promise<void> = async () => undefined
+) {
   const disposers: (() => void)[] = []
   const registrations: Registration[] = []
   const unregisters = new Map<string, () => void>()
@@ -127,7 +141,7 @@ function recordingContext(storageGet: (key: string) => Promise<unknown> = async 
 
       return unregister
     },
-    storage: { get: storageGet, set: async () => undefined }
+    storage: { get: storageGet, set: storageSet }
   }
 
   return {
@@ -165,7 +179,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.botChatOwnsWorkspace.mockReturnValue(false)
   mocks.activateClassicGroupAuthorities.mockResolvedValue(false)
+  mocks.onEvent.mockImplementation((_name: string, _callback: (event?: unknown) => void) => () => undefined)
   mocks.sessionOwnsWorkspace.mockReturnValue(false)
+  mocks.startDesktopRoomCommandRuntime.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -217,9 +233,11 @@ describe('hosted Group Chat startup', () => {
     await settle()
     expect(mocks.scheduleGroupChatServerSync).not.toHaveBeenCalled()
     expect(mocks.startHostedRoomRuntime).not.toHaveBeenCalled()
+    expect(mocks.mailboxClaim).not.toHaveBeenCalled()
     rejectActivation(new Error('disk unavailable'))
     await settle()
     expect(mocks.scheduleGroupChatServerSync).not.toHaveBeenCalled()
+    expect(mocks.mailboxClaim).not.toHaveBeenCalled()
     failed.dispose()
 
     mocks.activateClassicGroupAuthorities.mockImplementationOnce(async () => {
@@ -232,8 +250,41 @@ describe('hosted Group Chat startup', () => {
     await settle()
     await settle()
     expect(mocks.scheduleGroupChatServerSync).toHaveBeenCalledTimes(1)
-    expect(mocks.startHostedRoomRuntime).toHaveBeenCalled()
+    expect(mocks.startDesktopRoomCommandRuntime).toHaveBeenCalledWith(recovered.ctx.storage)
+    expect(mocks.mailboxClaim).not.toHaveBeenCalled()
     recovered.dispose()
+  })
+
+  it('retries two failed mailbox starts on existing push signals without polling', async () => {
+    paneStores()
+    let pending!: () => void
+    mocks.onEvent.mockImplementation((name: string, callback: (event?: unknown) => void) => {
+      if (name === 'desktop_rooms.commands.pending') {
+        pending = callback as () => void
+      }
+
+      return () => undefined
+    })
+    mocks.startDesktopRoomCommandRuntime
+      .mockRejectedValueOnce(new Error('disk unavailable one'))
+      .mockRejectedValueOnce(new Error('disk unavailable two'))
+      .mockImplementationOnce(async () => {
+        mocks.mailboxClaim()
+      })
+    const harness = recordingContext()
+    plugin.register(harness.ctx)
+    await settle()
+    await settle()
+    expect(mocks.startDesktopRoomCommandRuntime).toHaveBeenCalledTimes(1)
+
+    pending()
+    await settle()
+    expect(mocks.startDesktopRoomCommandRuntime).toHaveBeenCalledTimes(2)
+    pending()
+    await settle()
+    expect(mocks.startDesktopRoomCommandRuntime).toHaveBeenCalledTimes(3)
+    expect(mocks.mailboxClaim).toHaveBeenCalledTimes(1)
+    harness.dispose()
   })
 
   it('heals a cold duplicated user cache before any gateway replay is available', async () => {
@@ -248,6 +299,52 @@ describe('hosted Group Chat startup', () => {
     expect($groupChats.get().Board.log).toEqual([canonicalUser()])
     expect(mocks.startHostedRoomRuntime).toHaveBeenCalled()
     harness.dispose()
+  })
+
+  it('hydrates bounded completion results before mailbox startup without rotating authority', async () => {
+    paneStores()
+
+    const room: GroupChat = {
+      roomId: 'room-1',
+      members: [{ name: 'builder' }],
+      log: [],
+      watermarks: {},
+      desktopAuthorityToken: 'authority:saved',
+      desktopAuthorityHash: classicAuthorityHash('authority:saved')
+    }
+
+    room.desktopCommandSettled = settleDesktopCommand('Workshop', room, 'send:latest', 'send', {
+      room_name: 'Workshop',
+      thread_id: 'original'
+    })
+
+    for (let index = 0; index < 140; index++) {
+      room.desktopCommandSettled[`old:${index}`] = index
+    }
+
+    const cold = JSON.parse(JSON.stringify({ Renamed: room }))
+    const harness = recordingContext(async key => (key === 'group-chats' ? cold : undefined))
+    const chat = await import('./group-chat')
+    let checked = false
+    mocks.startDesktopRoomCommandRuntime.mockImplementationOnce(async () => {
+      const hydrated = chat.$groupChats.get().Renamed
+      expect(Object.keys(hydrated.desktopCommandSettled!)).toHaveLength(128)
+      expect(desktopCommandResult('Renamed', hydrated, 'send:latest', 'send')).toEqual({
+        room_name: 'Workshop',
+        thread_id: 'original'
+      })
+      expect(hydrated.desktopAuthorityToken).toBe('authority:saved')
+      checked = true
+    })
+
+    try {
+      plugin.register(harness.ctx)
+      await settle()
+      expect(checked).toBe(true)
+    } finally {
+      harness.dispose()
+      chat.$groupChats.set({})
+    }
   })
 
   it.each([true, false, undefined, 'true'])(
