@@ -65,6 +65,7 @@ import {
   $groupClarify,
   $groupHostedNeedsYou,
   $groupNeedsYou,
+  activateClassicGroupAuthorities,
   groupChatContinuityMode,
   groupChatHostedGateway,
   groupSpeakerLabel,
@@ -78,6 +79,7 @@ import type { GroupChatRoom } from './group-chat'
 import { GroupClarifyCard, GroupImageControls, GroupMentionInput } from './group-chat-parts'
 import type { GroupRoomPrompt } from './group-chat-parts'
 import { SharedFilesControl } from './group-files-view'
+import { storedClassicDesktopAuthority } from './group-desktop-authority'
 import { GroupHoldStatus } from './group-hold-status'
 import {
   botGroups,
@@ -233,6 +235,7 @@ export async function disbandGroupChat(group: string, members: RosterRow[]) {
     for (const [name, room] of Object.entries($groupChats.get())) {
       if (name !== group && Array.isArray(room.log)) {
         durable[name] = {
+          ...storedClassicDesktopAuthority(room),
           log: room.log,
           watermarks: room.watermarks,
           sessions: room.sessions || {},
@@ -1651,6 +1654,7 @@ function GroupChatMainView({ group }: GroupChatMainViewProps) {
  *  write itself repaints nothing, the duplicate stuck until an unrelated
  *  re-render. */
 export function openGroupChat(group: string): void {
+  void activateClassicGroupAuthorities([group]).catch(() => undefined)
   // A room selection supersedes any bot-open transition still hydrating.
   // The in-flight host navigation may complete underneath this workspace,
   // but it may not later close or visually steal the room the user chose.

@@ -26,8 +26,10 @@ import type * as RoutingModule from './routing'
 import { canonicalUser, optimisticUser, userRoom } from './user-event-test-fixtures'
 
 const mocks = vi.hoisted(() => ({
+  activateClassicGroupAuthorities: vi.fn(async () => false),
   botChatOwnsWorkspace: vi.fn(() => false),
   paneVisibility: vi.fn(),
+  scheduleGroupChatServerSync: vi.fn(),
   sessionOwnsWorkspace: vi.fn(() => false),
   startHostedRoomRuntime: vi.fn(async () => undefined),
   stopHostedRoomRuntime: vi.fn(),
@@ -75,10 +77,11 @@ vi.mock('./group-chat', async () => {
   return {
     $groupChats: nanoAtom({}),
     $groupChatWorkspace: nanoAtom(null),
+    activateClassicGroupAuthorities: mocks.activateClassicGroupAuthorities,
     assignLegacyThreads: (log: unknown[]) => log,
     handleSessionsGatewayTransition: vi.fn(),
     pullGroupChatServerState: vi.fn(async () => false),
-    scheduleGroupChatServerSync: vi.fn(),
+    scheduleGroupChatServerSync: mocks.scheduleGroupChatServerSync,
     setGroupChatSyncDisposed: vi.fn(),
     stopGroupChatServerSync: vi.fn(),
     sweepGroupChatMembersForRemovedConnection: vi.fn(),
@@ -161,6 +164,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.botChatOwnsWorkspace.mockReturnValue(false)
+  mocks.activateClassicGroupAuthorities.mockResolvedValue(false)
   mocks.sessionOwnsWorkspace.mockReturnValue(false)
 })
 
@@ -189,6 +193,49 @@ describe('the Bots pane dock', () => {
 })
 
 describe('hosted Group Chat startup', () => {
+  it('awaits durability-gated classic authority activation before publishing or starting services', async () => {
+    paneStores()
+    let rejectActivation!: (error: Error) => void
+    mocks.activateClassicGroupAuthorities.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((_resolve, reject) => {
+          rejectActivation = reject
+        })
+    )
+
+    const existing = {
+      Planning: {
+        log: [{ at: 1, from: { kind: 'user', name: 'You' }, text: 'Existing', thread: 'thread-1' }],
+        members: [{ name: 'reviewer' }],
+        roomId: 'room-1',
+        watermarks: {}
+      }
+    }
+
+    const failed = recordingContext(async key => (key === 'group-chats' ? existing : undefined))
+    plugin.register(failed.ctx)
+    await settle()
+    expect(mocks.scheduleGroupChatServerSync).not.toHaveBeenCalled()
+    expect(mocks.startHostedRoomRuntime).not.toHaveBeenCalled()
+    rejectActivation(new Error('disk unavailable'))
+    await settle()
+    expect(mocks.scheduleGroupChatServerSync).not.toHaveBeenCalled()
+    failed.dispose()
+
+    mocks.activateClassicGroupAuthorities.mockImplementationOnce(async () => {
+      mocks.scheduleGroupChatServerSync()
+
+      return true
+    })
+    const recovered = recordingContext(async key => (key === 'group-chats' ? existing : undefined))
+    plugin.register(recovered.ctx)
+    await settle()
+    await settle()
+    expect(mocks.scheduleGroupChatServerSync).toHaveBeenCalledTimes(1)
+    expect(mocks.startHostedRoomRuntime).toHaveBeenCalled()
+    recovered.dispose()
+  })
+
   it('heals a cold duplicated user cache before any gateway replay is available', async () => {
     paneStores()
     const cold = JSON.parse(JSON.stringify({ Board: userRoom([optimisticUser(), canonicalUser()]) }))

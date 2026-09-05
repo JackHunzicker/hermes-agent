@@ -202,6 +202,12 @@ export interface GroupChat {
   members?: GroupMember[]
   /** Immutable identity, so a rename doesn't fork the room. */
   roomId?: null | string
+  /** Classic mailbox incarnation; public commitment, never hosted authority. */
+  desktopAuthorityHash?: string
+  /** Private preimage persisted only in Desktop plugin storage. */
+  desktopAuthorityToken?: string
+  /** Conflicting incarnation claims fail closed until the room is recreated. */
+  desktopAuthorityConflict?: true
   running?: boolean
   /** Stable authority installation id for a gateway-hosted room. */
   hosted?: null | string

@@ -45,6 +45,7 @@ import {
 import {
   $groupChats,
   $groupChatWorkspace,
+  activateClassicGroupAuthorities,
   assignLegacyThreads,
   handleSessionsGatewayTransition,
   pullGroupChatServerState,
@@ -55,6 +56,7 @@ import {
   updateGroupChat
 } from './group-chat'
 import { renameGroupChat } from './group-chat-view'
+import { storedClassicDesktopAuthority } from './group-desktop-authority'
 import { groupWorkspaceOwnerKey } from './group-membership'
 import { startHostedRoomRuntime, stopHostedRoomRuntime } from './hosted-room-runtime'
 import { reconcileHostedUserEvents, storedHostedUserEvent } from './hosted-user-events'
@@ -129,6 +131,7 @@ export default {
             hostedAlreadyRenamed: true
           })
       })
+
     }
 
     startFaceClock()
@@ -267,6 +270,7 @@ export default {
               if (room && Array.isArray(room.log)) {
                 const log = room.log.map(storedHostedUserEvent)
                 rooms[name] = {
+                  ...storedClassicDesktopAuthority(room),
                   // Pre-thread entries get synthetic thread ids on hydrate so
                   // every UI/engine path can assume entry.thread exists.
                   log: assignLegacyThreads(
@@ -323,8 +327,8 @@ export default {
 
               if (annotated.changed) {
                 // Per-room updateGroupChat keeps the durable record's full
-                // shape (sessionOwners, holds) in storage; sync:false —
-                // the scheduleGroupChatServerSync below publishes once.
+                // shape (sessionOwners, holds) in storage; sync:false because
+                // ordered room-service startup publishes after hydration.
                 for (const [roomName, room] of Object.entries(annotated.rooms)) {
                   if (room !== $groupChats.get()[roomName]) {
                     updateGroupChat(roomName, () => room, {
@@ -342,7 +346,11 @@ export default {
           // must hydrate the gateway projection instead of merely avoiding an
           // empty overwrite and then rendering an empty conversation.
           await pullGroupChatServerState().catch(() => false)
-          scheduleGroupChatServerSync($groupChats.get())
+          const authorityActivated = await activateClassicGroupAuthorities()
+
+          if (!authorityActivated) {
+            scheduleGroupChatServerSync($groupChats.get())
+          }
         })
         .catch(() => undefined)
         .finally(startRoomServices)
