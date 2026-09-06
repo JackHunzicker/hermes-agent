@@ -160,9 +160,9 @@ class HostedRoomService:
         return acquire_turn_lock(self.root, profile)
 
     def start(self) -> None:
+        self.runtime.start()
         if self.replication is not None:
             self.replication.start()
-        self.runtime.start()
 
     def stop(self, *, timeout: float = 5.0) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)

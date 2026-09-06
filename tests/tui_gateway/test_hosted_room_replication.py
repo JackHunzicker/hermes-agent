@@ -582,6 +582,33 @@ def test_required_room_store_errors_are_not_hidden_as_optional_replication_failu
         HostedRoomService(SimpleNamespace(), db_path=pair.source)
 
 
+@pytest.mark.parametrize("failed_index", [0, 1])
+def test_partial_publisher_start_failure_keeps_runtime_and_cleanup_working(tmp_path, monkeypatch, failed_index):
+    monkeypatch.setattr(rooms, "local_authority_gateway_id", lambda: HOME)
+    service = HostedRoomService(SimpleNamespace(), db_path=tmp_path / "state.db")
+    original_start = threading.Thread.start
+
+    def fail_one(thread):
+        if thread.name == f"hosted-room-replication-{failed_index}":
+            raise RuntimeError("can't start new thread")
+        return original_start(thread)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(threading.Thread, "start", fail_one)
+            service.start()
+            assert service.runtime.status()["running"] is True
+            assert service.replication.status()["error"] == "publisher_start_failed"
+            assert service.stop(timeout=2)
+        assert not any(thread.is_alive() for thread in service.replication._threads)
+        service.start()
+        assert service.runtime.status()["running"] is True
+        assert service.replication.status()["error"] is None
+        assert service.replication.status()["workers"] == publisher.WORKERS
+    finally:
+        assert service.stop(timeout=2)
+
+
 @pytest.mark.parametrize("code", [401, 409])
 def test_shared_target_blocked_route_can_only_switch_to_another_authorized_route(pair, code):
     other = add_profile(pair)
