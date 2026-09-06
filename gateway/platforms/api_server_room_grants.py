@@ -192,12 +192,11 @@ async def _handle_room_member_invitation(
         from gateway.hosted_room_peer import (
             decode_room_grant,
             issue_room_grant,
+            invitation_permissions,
         )
 
         profile, target_install_id = _local_target(None, _api_request_profile)
-        replication = body.get("replication", False)
-        if type(replication) is not bool:
-            raise ValueError("replication must be a boolean")
+        permissions = invitation_permissions(body.get("replication", False))
         ttl = float(body.get("ttl_seconds", 3600))
         if not 60 <= ttl <= 24 * 60 * 60:
             raise ValueError("ttl_seconds must be between 60 and 86400")
@@ -219,8 +218,7 @@ async def _handle_room_member_invitation(
             member_id=str(body["member_id"]),
             target_install_id=target_install_id,
             target_profile=profile,
-            permissions=("approve", "attachment.stage", "artifact.ack", "artifact.read", "dispatch", "status", "stop")
-            + (("replicate",) if replication else ()),
+            permissions=permissions,
             execution_policy_digest=execution_policy["policy_digest"],
             issued_at=time.time(),
             ttl_seconds=ttl,

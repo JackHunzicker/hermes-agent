@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
-from aiohttp import web
+try:
+    from aiohttp import web
+except ImportError:
+    web = None  # type: ignore[assignment]
 
 from gateway import hosted_rooms as rooms
 from gateway import hosted_room_replicas as replicas

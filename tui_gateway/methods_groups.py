@@ -259,7 +259,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
             "desktop_compatibility_mailbox", "reciprocal_room_control", "reciprocal_room_control_setup",
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity", "peer_route_grant_fingerprint",
             "peer_grant_renewal",
-            ],
+            ] + (["authenticated_replication"] if room_link.get("enabled") else []),
         "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
 
 
@@ -267,7 +267,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
 def _(rid, params: dict, db_path, _catalog=_local_catalog, _expiry=_grant_expiry) -> dict:
     """Mint one target-issued room/profile grant for a prospective home."""
     from gateway.hosted_room_peer import (
-        decode_room_grant, gateway_room_grant_secret, issue_room_grant)
+        decode_room_grant, gateway_room_grant_secret, issue_room_grant, invitation_permissions)
     from gateway.hosted_rooms import local_authority_gateway_id
     from gateway.hosted_room_grant_state import reserve_grant_state
     if not _room_link_run_storage_durable():
@@ -290,6 +290,7 @@ def _(rid, params: dict, db_path, _catalog=_local_catalog, _expiry=_grant_expiry
         authority_epoch=int(params.get("authority_epoch") or 0),
         member_id=str(params.get("member_id") or ""), target_install_id=installation_id,
         target_profile=profile, execution_policy_digest=execution_policy["policy_digest"],
+        permissions=invitation_permissions(params.get("replication", False)),
         ttl_seconds=ttl, status_ttl_seconds=status_ttl)
     claims = decode_room_grant(grant_secret, token, permission="status")
     reserve_grant_state(_profile_state_db_paths(profile), claims=claims, expires_at=_expiry(claims))
