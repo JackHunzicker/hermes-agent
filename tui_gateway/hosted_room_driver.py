@@ -152,6 +152,7 @@ class HostedRoomRuntime:
         transport_resolver: MemberTransportResolver | None = None,
         prepare_room: Callable[[HostedRoomBinding], None] | None = None,
         prepare_leased_room: Callable[[HostedRoomBinding, state.DriverLease], None] | None = None,
+        maintain_leased_room: Callable[[HostedRoomBinding, state.DriverLease], None] | None = None,
         publish_terminal: Callable[[HostedRoomBinding, Mapping[str, Any]], None] | None = None,
         pending_action: Callable[[str, str, Mapping[str, Any] | None], None] | None = None,
         attachment_loader: AttachmentLoader | None = None,
@@ -180,6 +181,7 @@ class HostedRoomRuntime:
         self.rpc, self.transport_resolver, self.turn_lock = rpc, transport_resolver, turn_lock
         self.prepare_room, self.publish_terminal = prepare_room, publish_terminal
         self.prepare_leased_room = prepare_leased_room
+        self.maintain_leased_room = maintain_leased_room
         self.pending_action, self.clock = pending_action, clock
         self.attachment_loader = attachment_loader
         for name, value in positive.items():
@@ -670,11 +672,21 @@ class HostedRoomRuntime:
                 continue
             self._execute_attempt(binding, task, attempt)
             current = state.get_task(self.db_path, task["identity"])
+            if current["status"] in state.TERMINAL_STATUSES:
+                lease = self._maintain_room(binding, lease)
             if current["status"] not in state.TERMINAL_STATUSES:
                 retry = self._unavailable_route_retries.get((task["identity"].room_id, _member_id(task)))
                 if current["status"] == "queued" and retry is not None and self.clock() < retry["next_attempt_at"]:
                     continue
                 return
+
+        self._maintain_room(binding, lease)
+
+    def _maintain_room(self, binding: HostedRoomBinding, lease: state.DriverLease) -> state.DriverLease:
+        if self.maintain_leased_room is not None and not self._stop.is_set():
+            lease = self._renew_lease_if_needed(lease)
+            self.maintain_leased_room(binding, lease)
+        return lease
 
     def _defer_unavailable_route(self, task: Mapping[str, Any]) -> float:
         key = (task["identity"].room_id, _member_id(task))
@@ -953,6 +965,7 @@ class HostedRoomRuntime:
                 if interruption is not None:
                     return interruption
             self._report_pending_action(binding, task, session_id=session_id, info=info)
+            lease = self._maintain_room(binding, lease)
             remaining = max(0.0, deadline_monotonic - time.monotonic())
             self._wake.wait(min(self.active_poll_interval_seconds, remaining))
             self._wake.clear()

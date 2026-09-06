@@ -1460,3 +1460,67 @@ def _attachment_payload():
         "sha256": hashlib.sha256(data).hexdigest(),
         "data": data,
     }
+
+
+def test_renewal_budget_covers_new_clients_without_changing_foreground(monkeypatch):
+    from tui_gateway import hosted_room_peer_http as http
+
+    now = [100.0]
+    monkeypatch.setattr(http.time, "monotonic", lambda: now[0])
+    client = PeerRunsHTTPClient(base_url="https://peer.example", api_key="")
+    ordinary_timeout = client.timeout_seconds
+    foreground = []
+    with http.room_grant_request_budget(2, clock=lambda: now[0]):
+        cleanup = PeerRunsHTTPClient(base_url="https://peer.example", api_key="")
+        assert client.timeout_seconds == cleanup.timeout_seconds == 1
+        thread = threading.Thread(target=lambda: foreground.append(client.timeout_seconds))
+        thread.start()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert foreground == [ordinary_timeout]
+        now[0] += 1.25
+        with http.room_grant_request_budget(10, clock=lambda: now[0]):
+            assert client.timeout_seconds == cleanup.timeout_seconds == 0.75
+        now[0] += 0.75
+        with pytest.raises(PeerRunsHTTPError, match="budget exhausted"):
+            cleanup.timeout_seconds
+    assert client.timeout_seconds == cleanup.timeout_seconds == ordinary_timeout
+
+
+def test_receipt_only_recovery_never_replays_an_unknown_admission(monkeypatch):
+    client = PeerRunsHTTPClient(base_url="https://peer.example", api_key="")
+    requests = []
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: requests.append(args))
+    with pytest.raises(PeerRunsHTTPError, match="accepted peer run receipt is unavailable") as failure:
+        client.recover_dispatch(dispatch=_dispatch(), grant="synthetic.room.grant", receipt_only=True)
+    assert failure.value.ambiguous and failure.value.retryable
+    assert requests == []
+
+
+def test_renewal_requests_and_response_reads_share_one_deadline(monkeypatch):
+    from contextlib import contextmanager
+    from tui_gateway import hosted_room_peer_http as http
+
+    now, timeouts = [100.0], []
+    monkeypatch.setattr(http.time, "monotonic", lambda: now[0])
+
+    @contextmanager
+    def open_response(request, *, timeout, reject_redirects):
+        assert reject_redirects is True
+        timeouts.append(timeout)
+        now[0] += min(0.75, timeout)
+        response = io.BytesIO(b'{"ok": true}')
+        response.headers = {}
+        yield response
+
+    monkeypatch.setattr(http, "_open_roomlink_url", open_response)
+    with http.room_grant_request_budget(2, clock=lambda: now[0]):
+        for _ in range(2):
+            client = PeerRunsHTTPClient(base_url="https://peer.example", api_key="")
+            assert client._request("/test") == {"ok": True}
+        with pytest.raises(PeerRunsHTTPError, match="time budget"):
+            client._request("/test")
+        with pytest.raises(PeerRunsHTTPError, match="budget exhausted"):
+            client._request("/test")
+    assert timeouts == [1, 1, 0.5]
+    assert now[0] == 102

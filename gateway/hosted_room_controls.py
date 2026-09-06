@@ -550,6 +550,7 @@ def issue_home_control_token(
     authority_epoch: Any,
     expires_at: Any,
     request_id: Any | None = None,
+    reuse_existing: bool = False,
     now: float | None = None,
 ) -> IssuedRoomControlToken:
     """Create one replay-safe member credential and retain only its hash."""
@@ -594,13 +595,29 @@ def issue_home_control_token(
                 "active Group Chat authority scope is unavailable"
             )
         existing = conn.execute(
-            """SELECT request_id, status, expires_at
+            """SELECT request_id, token_hash, status, created_at, expires_at
                  FROM hosted_room_control_tokens
                 WHERE room_id=? AND member_id=? AND authority_gateway_id=?
                   AND authority_epoch=?""",
             (room_id, member_id, authority_gateway_id, authority_epoch),
         ).fetchone()
         if existing is not None and existing["status"] == "active":
+            if reuse_existing is True and float(existing["expires_at"]) > created_at:
+                recovered = _derived_control_token(
+                    room_id=room_id, member_id=member_id,
+                    authority_gateway_id=authority_gateway_id, authority_epoch=authority_epoch,
+                    request_id=str(existing["request_id"]),
+                )
+                if not hmac.compare_digest(
+                    hashlib.sha256(recovered.encode("ascii")).digest(), bytes(existing["token_hash"])
+                ):
+                    raise HostedRoomControlConflictError("existing control credential cannot be recovered")
+                return IssuedRoomControlToken(
+                    room_id=room_id, member_id=member_id,
+                    authority_gateway_id=authority_gateway_id, authority_epoch=authority_epoch,
+                    control_token=recovered, status="active",
+                    created_at=float(existing["created_at"]), expires_at=float(existing["expires_at"]),
+                )
             if (
                 str(existing["request_id"]) == normalized_request_id
                 and float(existing["expires_at"]) == expires_at
@@ -622,6 +639,8 @@ def issue_home_control_token(
                 raise HostedRoomControlConflictError(
                     "an active control credential already exists for this scope"
                 )
+        if reuse_existing is True and existing is not None:
+            raise HostedRoomControlConflictError("control access was invalidated; explicit authorization is required")
         conn.execute(
             """INSERT INTO hosted_room_control_tokens(
                    room_id, member_id, authority_gateway_id, authority_epoch,
