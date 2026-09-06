@@ -12,6 +12,7 @@ from gateway.platforms import api_server_room_artifacts
 from gateway.platforms import api_server_room_controls
 from gateway.platforms import api_server_room_dispatch
 from gateway.platforms import api_server_room_grants
+from gateway.platforms import api_server_room_replicas
 from gateway.platforms import api_server_runs
 
 
@@ -182,11 +183,15 @@ def test_roomlink_and_run_route_tuples_are_shard_owned():
         *api_server_room_controls._http_routes(adapter),
         *api_server_room_attachments._http_routes(adapter),
         *api_server_room_artifacts._http_routes(adapter),
+        *api_server_room_replicas.http_routes(adapter),
     ]
     def route_contract(routes):
         return [(method, path, handler.__module__) for method, path, handler in routes]
     assert route_contract(room_routes[len(member_routes) + 1:]) == route_contract(expected_extensions)
     assert all(callable(handler) for _, _, handler in room_routes)
+    room_handlers = {(method, path): handler for method, path, handler in room_routes}
+    assert ("POST", "/v1/room-members/replica") in room_handlers
+    assert len(room_handlers) == len(room_routes)
     assert [(method, path) for method, path, _ in run_routes] == [
         ("POST", "/v1/runs"),
         ("GET", "/v1/runs/{run_id}"),
