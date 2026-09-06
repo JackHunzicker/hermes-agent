@@ -287,11 +287,12 @@ class FilesMenu:
         )
 
         current = await self.fresh_room()
-        bot_choices = None
+        # Remote inventory rows are thin links; only the canonical resolver
+        # supplies the authority-checked roster used by both text and buttons.
+        bot_choices = await asyncio.to_thread(
+            room_bot_picker_choices, self.backend, current,
+        )
         if view in {"bots", "bot"}:
-            bot_choices = await asyncio.to_thread(
-                room_bot_picker_choices, self.backend, current,
-            )
             detail = await asyncio.to_thread(
                 format_room_bot_detail if view == "bot" else format_room_bot_list,
                 self.backend,
@@ -321,18 +322,17 @@ class FilesMenu:
             ]
         if view != "room":
             actions.append((text("activity"), ("room", None)))
-        if view != "bots" and current.get("members"):
+        if view != "bots" and bot_choices:
             actions.append((text("bots"), ("bots", None)))
         actions.append((text("back_groups"), ("groups", None)))
         current = await self.fresh_room()
-        if bot_choices is not None:
-            # Room identity alone cannot detect a roster change during disclosure.
-            fresh_choices = await asyncio.to_thread(
-                room_bot_picker_choices, self.backend, current,
-            )
-            verified = await self.fresh_room()
-            if fresh_choices != bot_choices or verified.get("members") != current.get("members"):
-                raise PermissionError("denied")
+        # Room identity alone cannot detect a roster change during disclosure.
+        fresh_choices = await asyncio.to_thread(
+            room_bot_picker_choices, self.backend, current,
+        )
+        verified = await self.fresh_room()
+        if fresh_choices != bot_choices or verified.get("members") != current.get("members"):
+            raise PermissionError("denied")
         return self.page(detail, actions, full_width=view == "bots")
 
     async def approval_page(self, position=0):
@@ -372,10 +372,10 @@ class FilesMenu:
 
     async def room_content_actions(self, current):
         """Only offer content known to exist; navigation never waits on delivery."""
-        from gateway.hosted_room_file_delivery import native_document_limit
-        from gateway.hosted_room_file_lookup import latest_reply
-
         try:
+            from gateway.hosted_room_file_delivery import native_document_limit
+            from gateway.hosted_room_file_lookup import latest_reply
+
             native_document_limit(self.adapter, self.event.source)
         except Exception:
             return []
@@ -1081,7 +1081,7 @@ def room_picker_callback(runner, event, backend, command, fallback):
     return selected, True
 
 
-async def try_room_menu(runner, event, backend, room, command):
+async def try_room_menu(runner, event, backend, room, command, *, view="room", bot_query=None):
     adapter = runner._adapter_for_source(event.source)
     if getattr(type(adapter), "supports_choice_pages", False) is not True:
         return False
@@ -1089,4 +1089,4 @@ async def try_room_menu(runner, event, backend, room, command):
 
     menu = FilesMenu(runner, event, backend, command)
     await menu.bind(room_reference(room))
-    return await menu.send_page(await menu.room_page())
+    return await menu.send_page(await menu.room_page(view=view, bot_query=bot_query))
