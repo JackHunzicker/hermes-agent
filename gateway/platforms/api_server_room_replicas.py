@@ -12,7 +12,7 @@ from gateway.hosted_room_peer import HostedRoomGrantError
 from gateway.hosted_room_replica_ingress import ingest_granted_page
 
 
-# Leave room for ASCII-escaped Unicode plus per-event framing and the fixed roster.
+# Replica requests use UTF-8 JSON; retain bounded framing and roster headroom.
 MAX_REPLICA_HTTP_BYTES = 2 * (rooms.MAX_LOG_PAGE_BYTES + rooms.MAX_MEMBERS_JSON_BYTES) + 512 * 1024
 
 

@@ -1,6 +1,7 @@
 """Real loopback HTTP grants, transport and passive replica persistence."""
 
 import asyncio
+import json
 
 import pytest
 from aiohttp import web
@@ -113,3 +114,25 @@ async def test_replication_http_body_is_bounded(setup, monkeypatch):
         assert response.status in {400, 413}
         with pytest.raises(replicas.ReplicaError, match="not found"):
             replicas.replica_state(target, room_id="room")
+
+
+@pytest.mark.asyncio
+async def test_near_limit_unicode_page_passes_through_real_replica_transport(setup):
+    source, target, app = setup
+    for i in range(8):
+        rooms.append_event(
+            source, room_id="room", event_id=f"large-{i}", kind="message.user",
+            actor={"kind": "user", "id": "owner"}, payload={"text": "\u00e9" * 130000},
+            authority_gateway_id=HOME, authority_epoch=1,
+        )
+    page = rooms.read_events(source, room_id="room")
+    assert page["has_more"] is False
+    body = {"room_id": "room", "room_name": "Workshop", "members": MEMBERS, "page": page}
+    assert len(json.dumps(body, ensure_ascii=True).encode()) > ingress.MAX_REPLICA_HTTP_BYTES
+    assert len(json.dumps(body, ensure_ascii=False).encode()) < ingress.MAX_REPLICA_HTTP_BYTES
+    async with TestClient(TestServer(app)) as http:
+        token = await invite(http, replication=True)
+        sender = PeerRunsHTTPClient(base_url=str(http.make_url("/")), api_key="", timeout_seconds=5)
+        result = await asyncio.to_thread(sender.replicate_page, grant=token, target_profile="default", **body)
+        assert result["stored_seq"] == page["latest_seq"]
+        assert replicas.replica_state(target, room_id="room")["last_seq"] == page["latest_seq"]
