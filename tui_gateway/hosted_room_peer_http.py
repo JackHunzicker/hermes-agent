@@ -353,13 +353,13 @@ class PeerRunsHTTPClient:
     def _request(
         self, path: str, *, method: str = "GET", body: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None, room_grant: str | None = None,
-        reject_redirects: bool = False) -> dict[str, Any]:
+        reject_redirects: bool = False, ensure_ascii: bool = True) -> dict[str, Any]:
         # A maintenance request cannot restart its socket budget across redirects.
         reject_redirects = reject_redirects or _ROOM_GRANT_REQUEST_BUDGET.get() is not None
         deadline, ambiguous = time.monotonic() + self.timeout_seconds, method == "POST"
         request = urllib.request.Request(
             self._request_url(path), method=method,
-            data=None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8"),
+            data=None if body is None else json.dumps(body, separators=(",", ":"), ensure_ascii=ensure_ascii).encode("utf-8"),
             headers={
                 "Authorization": (
                     f"HermesRoom {room_grant}" if room_grant else f"Bearer {self.api_key}"),
@@ -772,8 +772,9 @@ class PeerRunsHTTPClient:
     ) -> Mapping[str, Any]:
         """Deliver history with a replica-enabled grant, never broad API auth."""
         prefix = "" if target_profile == "default" else f"/p/{urllib.parse.quote(target_profile, safe='')}"
-        return self._scoped_post(
-            prefix + "/v1/room-members/replica", grant,
+        return self._request(
+            prefix + "/v1/room-members/replica", method="POST",
+            room_grant=self._require_room_grant(grant), ensure_ascii=False,
             body={"room_id": room_id, "room_name": room_name, "members": members, "page": page},
         )
 
