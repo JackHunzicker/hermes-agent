@@ -204,6 +204,7 @@ class FilesMenu:
         self.revision = 0
         self.long_codes = False
         self.approval_callback = None
+        self.permission_menu = None
         self.handle = secrets.token_hex(8)
 
     def check(self):
@@ -320,6 +321,8 @@ class FilesMenu:
             actions[:0] = [
                 (choice["label"], ("bot", choice["value"])) for choice in bot_choices
             ]
+            if self.runner._can_approve_group_chats(self.event) and current.get("_room_mode") == "hosted":
+                actions.append(("Manage remembered approvals", ("permissions", None)))
         if view != "room":
             actions.append((text("activity"), ("room", None)))
         if view != "bots" and bot_choices:
@@ -348,6 +351,8 @@ class FilesMenu:
         stamp = _disclosure_stamp(self.runner, self.event)
         pending = await asyncio.to_thread(pending_approvals_for_room, self.backend, current)
         await self.fresh_room()
+        if any("remember" in action["approval"].get("choices", []) for action in pending):
+            return await self.permission_page(approvals=True)
         position = min(max(0, position), max(0, len(pending) - 1))
         choices = approval_picker_choices(current, pending, selection=position + 1)
         self.approval_callback = self.runner._group_chat_approval_callback(
@@ -369,6 +374,30 @@ class FilesMenu:
         if len(title) > 2048:
             raise ValueError("Approval details exceed the page limit")
         return self.page(title, actions, full_width=True)
+
+    def _permission_result(self, result):
+        if isinstance(result, ChoicePage):
+            return self.page(result.title, [
+                (choice["label"], ("room", None) if choice["value"] == "group"
+                 else ("permission_action", choice["value"])) for choice in result.choices
+            ], full_width=True)
+        return self.page(str(result), [(text("group_chat"), ("room", None))])
+
+    async def permission_page(self, *, approvals=False):
+        from gateway.group_chat_approval_permissions import GroupApprovalPermissions
+        from gateway.group_home_consent import _disclosure_stamp
+
+        current = await self.fresh_room()
+        if not self.runner._can_approve_group_chats(self.event):
+            return self.runner._group_chat_approval_denial()
+        self.permission_menu = GroupApprovalPermissions(
+            self.runner, self.event, self.backend, current, profile=self.profile,
+            command=self.command, stamp=_disclosure_stamp(self.runner, self.event),
+        )
+        page = await (self.permission_menu.approval_page() if approvals
+                      else self.permission_menu.permissions_page())
+        await self.fresh_room()
+        return self._permission_result(page)
 
     async def room_content_actions(self, current):
         """Only offer content known to exist; navigation never waits on delivery."""
@@ -794,6 +823,21 @@ class FilesMenu:
             if not _rate(self.runner, self.source_key, "read"):
                 return text("rate")
             kind, data = action
+            if kind == "permissions":
+                return await self.permission_page()
+            if kind == "permission_action":
+                from gateway.group_home_consent import DisclosureChanged
+                from gateway.hosted_room_messaging_approvals import MessagingApprovalError
+
+                await self.fresh_room()
+                if self.permission_menu is None:
+                    return text("expired")
+                try:
+                    result = await self.permission_menu.choose(chat_id, data)
+                except (MessagingApprovalError, DisclosureChanged) as exc:
+                    result = str(exc)
+                await self.fresh_room()
+                return self._permission_result(result)
             if kind == "approvals":
                 return await self.approval_page(data or 0)
             if kind == "approval_decision":
