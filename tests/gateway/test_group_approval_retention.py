@@ -40,12 +40,13 @@ def test_purged_room_leaves_no_remembered_payload_or_quota(tmp_path):
     db = tmp_path / "state.db"
     grant(db)
     room = hosted_rooms.room_state(db, room_id="group-a")
+    decisions_before = approvals.approval_command(db, command_id="grant")
     hosted_rooms.disband_room(db, room_id="group-a", expected_epoch=room["authority_epoch"], expected_gateway_id="home")
     hosted_rooms.prune_disbanded_rooms(db, now=time.time() + hosted_rooms.DISBANDED_ROOM_RETENTION_SECONDS + 1)
     with transaction(db) as conn:
-        for table in ("hosted_room_approval_rules", "hosted_room_approval_rule_commands",
-                      "hosted_room_pending_approvals", "hosted_room_messaging_approval_commands"):
+        for table in ("hosted_room_approval_rules", "hosted_room_approval_rule_commands"):
             assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    assert approvals.approval_command(db, command_id="grant") == decisions_before
 
 
 def test_revoked_auto_identity_cannot_be_reintroduced_after_link_pruning(tmp_path):

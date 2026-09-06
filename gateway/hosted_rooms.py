@@ -563,7 +563,6 @@ _DEPENDENT_TABLES = (
     "hosted_room_policy_transcript_state", "hosted_room_policy_transcript", "hosted_room_policy_publications",
     "hosted_room_policy_watermarks", "hosted_room_policy_events", "hosted_room_policy_threads",
     "hosted_room_policy_cursors", "hosted_room_driver_tasks", "hosted_room_driver_leases", "hosted_room_remote_runs",
-    "hosted_room_pending_approvals", "hosted_room_messaging_approval_commands",
     "hosted_room_links", "hosted_room_control_commands", "hosted_room_control_tokens",
     "hosted_room_peer_controls", "hosted_room_peer_reservations", "hosted_room_events")
 
