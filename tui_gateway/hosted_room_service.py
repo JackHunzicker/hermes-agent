@@ -9,6 +9,7 @@ from hashlib import sha256
 import hashlib
 import os
 import shutil
+import sqlite3
 import threading
 import time
 from collections import Counter
@@ -33,6 +34,7 @@ from tui_gateway.hosted_room_driver import (
 from tui_gateway.hosted_room_peer_status import _RouteStatusPeerClient
 from tui_gateway.hosted_room_server_rpc import HostedRoomServerRPC
 from tui_gateway.hosted_room_artifact_service import HostedRoomArtifactMixin
+from tui_gateway.hosted_room_replication import HostedRoomReplicationPublisher
 from tui_gateway.hosted_room_peer_http import (
     PeerRunsHTTPClient, PeerRunsHTTPError,
     room_grant_request_budget, room_grant_request_budget_remaining)
@@ -133,6 +135,12 @@ class HostedRoomService(HostedRoomArtifactMixin):
             poll_interval_seconds=_HOSTED_ROOM_IDLE_FALLBACK_SECONDS,
             active_poll_interval_seconds=_HOSTED_ROOM_ACTIVE_POLL_SECONDS,
             turn_timeout_seconds=_hosted_room_turn_timeout_seconds())
+        self._replication_error = None
+        try:
+            self.replication = HostedRoomReplicationPublisher(self.db_path)
+        except (OSError, sqlite3.Error, ValueError):
+            self.replication = None
+            self._replication_error = "publisher_initialization_failed"
 
     def _load_stored_links(self) -> None:
         """Rehydrate persisted peer routes; collect per-link errors into one string."""
@@ -209,10 +217,18 @@ class HostedRoomService(HostedRoomArtifactMixin):
     def start(self) -> None:
         self.attachments.reconcile_room_events()
         self.attachments.prune()
+        if self.replication is not None:
+            self.replication.start()
         self.runtime.start()
 
     def stop(self, *, timeout: float = 5.0) -> bool:
-        return self.runtime.stop(timeout=timeout)
+        deadline = time.monotonic() + max(0.0, timeout)
+        if self.replication is not None:
+            self.replication.stop(timeout=0)
+        runtime_stopped = self.runtime.stop(timeout=max(0.0, deadline - time.monotonic()))
+        replication_stopped = self.replication is None or self.replication.stop(
+            timeout=max(0.0, deadline - time.monotonic()))
+        return runtime_stopped and replication_stopped
 
     def wakeup(self) -> None:
         self.runtime.wakeup()
@@ -1130,6 +1146,9 @@ class HostedRoomService(HostedRoomArtifactMixin):
 
     def status(self, room_id: str | None = None) -> dict[str, Any]:
         runtime = {**self.runtime.status(), "peer_routes": self._route_statuses(room_id)}
+        runtime["replication"] = self.replication.status(room_id) if self.replication is not None else {
+            "running": False, "workers": 0, "routes": None, "error": self._replication_error,
+            "mode": "passive_async_copy", "source_loss_safe": False}
         if self._link_load_error:
             runtime["link_load_error"] = self._link_load_error
         if room_id is None:
@@ -1152,6 +1171,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
             or bool(counts.get("indeterminate") or counts.get("stopping")),
             "counts": dict(counts), "pending_actions": pending_actions,
             "needs_attention": bool(pending_actions),
+            "replication": runtime["replication"],
             "peer_routes": self._route_statuses(room_id)}
 
 
