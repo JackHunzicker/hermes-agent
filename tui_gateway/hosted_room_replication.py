@@ -141,11 +141,18 @@ class HostedRoomReplicationPublisher:
                 return  # A timed-out stop must not spawn replacement workers.
             self._stop.clear()
             self._scan_at = 0.0
+            self._error = None
             self._threads = [threading.Thread(
                 target=self._worker, name=f"hosted-room-replication-{i}", daemon=True,
             ) for i in range(WORKERS)]
-            for thread in self._threads:
-                thread.start()
+            try:
+                for thread in self._threads:
+                    thread.start()
+            except (RuntimeError, OSError):
+                self._error = "publisher_start_failed"
+                self._stop.set()
+                self._threads = [thread for thread in self._threads if thread.ident is not None]
+                self._condition.notify_all()
 
     def stop(self, *, timeout: float = 5.0) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
@@ -154,7 +161,8 @@ class HostedRoomReplicationPublisher:
             self._condition.notify_all()
             threads = tuple(self._threads)
         for thread in threads:
-            thread.join(max(0.0, deadline - time.monotonic()))
+            if thread.ident is not None:
+                thread.join(max(0.0, deadline - time.monotonic()))
         return not any(t.is_alive() for t in threads)
 
     def _scan(self, now: float) -> None:
