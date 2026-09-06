@@ -58,13 +58,20 @@ def test_same_thread_followup_migrates_and_delivers_committed_peer_reply(
         recovered.runtime.rpc = recovered.rpc
         recovered.local_profiles = service.local_profiles
         backfills = []
-        original_backfill = recovered.policy_checkpoint._backfill_transcript
+        original_backfill = recovered.policy_checkpoint._ensure_cursor_and_transcript
 
-        def observed_backfill(conn, *, room_id, through_seq):
-            backfills.append(through_seq)
-            return original_backfill(conn, room_id=room_id, through_seq=through_seq)
+        def observed_backfill(conn, room_id):
+            missing = conn.execute(
+                "SELECT 1 FROM hosted_room_policy_transcript_state WHERE room_id=?", (room_id,),
+            ).fetchone() is None
+            result = original_backfill(conn, room_id)
+            restored = conn.execute(
+                "SELECT 1 FROM hosted_room_policy_transcript_state WHERE room_id=?", (room_id,),
+            ).fetchone() is not None
+            backfills.append(missing and restored)
+            return result
 
-        monkeypatch.setattr(recovered.policy_checkpoint, "_backfill_transcript", observed_backfill)
+        monkeypatch.setattr(recovered.policy_checkpoint, "_ensure_cursor_and_transcript", observed_backfill)
         recovered.start()
         recovered.send(
             room_id="room-1", event_id="user-2",
@@ -72,7 +79,7 @@ def test_same_thread_followup_migrates_and_delivers_committed_peer_reply(
         )
         _wait_for(lambda: len(recovered.rpc.prompts) == 2)
         assert recovered.stop(timeout=2)
-        assert backfills and backfills[0] > 0
+        assert any(backfills)
         with sqlite3.connect(db) as conn:
             assert conn.execute(
                 "SELECT 1 FROM hosted_room_policy_transcript_state WHERE room_id='room-1'"
