@@ -344,6 +344,20 @@ def validate_room_link_url(value: Any) -> tuple[str, TransportSecurity]:
     raise HostedRoomPeerError("target_url must use https outside the local machine")
 
 
+def room_link_profile_url(base_url: str, path: str, profile: str) -> str:
+    """Address a profile once, including endpoints already scoped by their owner."""
+    base_url, _ = validate_room_link_url(base_url)
+    if not isinstance(profile, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", profile) is None:
+        raise HostedRoomPeerError("peer target profile is invalid")
+    scoped = re.search(r"/p/([^/]+)$", urllib.parse.urlsplit(base_url).path)
+    if scoped:
+        if urllib.parse.unquote(scoped.group(1), errors="strict") != profile:
+            raise HostedRoomPeerError("peer target profile does not match the scoped endpoint")
+    elif profile != "default":
+        base_url += f"/p/{urllib.parse.quote(profile, safe='')}"
+    return base_url + path
+
+
 # Validator per dispatch field, in validation order (prompt/prompt_digest are cross-checked in from_mapping).
 _DISPATCH_FIELDS: dict[str, Callable[..., Any]] = dict(
     protocol_version=_positive_int, room_id=_identifier, home_install_id=_identifier, authority_gateway_id=_identifier,
