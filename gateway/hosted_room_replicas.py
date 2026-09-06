@@ -18,6 +18,7 @@ import math
 import sqlite3
 import time
 from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -370,12 +371,14 @@ def ingest_page(
     members: Any,
     page: Any,
     now: float | None = None,
+    _authorize: Callable[[sqlite3.Connection], None] | None = None,
 ) -> dict[str, Any]:
     """Persist one replay page for ``room_id``; idempotent, gap- and
     epoch-regression-safe.
 
     ``page`` is the verbatim result of the authority's ``groups.log`` call
-    (``read_events()``), whose ``authority`` stamp proves lineage.
+    (``read_events()``). Its authority stamp is metadata, not authentication;
+    network callers must use ``ingest_granted_page`` to verify provenance.
     """
     room_id = _validate_identifier(
         room_id, label="room_id", max_chars=MAX_ROOM_ID_CHARS
@@ -388,6 +391,8 @@ def ingest_page(
             raise ReplicaError("page contains an event for a different room")
     now = time.time() if now is None else float(now)
     with _replica_transaction(db_path) as conn:
+        if _authorize is not None:
+            _authorize(conn)
         _prune_disbanded_replicas_locked(conn, now=now)
         if conn.execute(
             "SELECT 1 FROM hosted_rooms WHERE room_id=?", (room_id,)
@@ -441,7 +446,7 @@ def ingest_page(
                 raise ReplicaError(
                     "stored replica is quarantined: " + str(row["quarantine_reason"])
                 )
-            if row["name"] != room_name or row["members_json"] != members_json:
+            if (row["name"] != room_name and _authorize is None) or row["members_json"] != members_json:
                 raise ReplicaError("replica metadata conflicts with stored state")
             if (
                 row["authority_gateway_id"] != authority["gateway_id"]
@@ -492,6 +497,14 @@ def ingest_page(
             raise ReplicaError("room.disbanded must be the terminal event")
         if disband_indexes and int(new_events[-1]["seq"]) != latest_seq:
             raise ReplicaError("room.disbanded must complete the source history")
+
+        projected_name = row["name"] if row is not None else room_name
+        if _authorize is not None:
+            # A sender can observe metadata ahead of this bounded page. Follow
+            # committed rename events instead of relabeling an incomplete prefix.
+            for event in new_events:
+                if event["kind"] == "room.renamed":
+                    projected_name = _validate_room_name(json.loads(event["payload_json"]).get("name"))
 
         event_sizes = [_event_bytes(event) for event in new_events]
         added_bytes = sum(event_sizes)
@@ -565,7 +578,7 @@ def ingest_page(
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     room_id,
-                    room_name,
+                    projected_name,
                     members_json,
                     authority["gateway_id"],
                     authority["epoch"],
@@ -581,7 +594,7 @@ def ingest_page(
             conn.execute(
                 """UPDATE hosted_room_replicas
                       SET last_seq=?, latest_seq=?, event_bytes=event_bytes+?,
-                          updated_at=?, disbanded_at=?
+                          updated_at=?, disbanded_at=?, name=?
                     WHERE room_id=?""",
                 (
                     new_last,
@@ -589,6 +602,7 @@ def ingest_page(
                     added_bytes,
                     now,
                     terminal_at,
+                    projected_name,
                     room_id,
                 ),
             )

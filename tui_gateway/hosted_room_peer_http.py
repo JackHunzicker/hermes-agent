@@ -559,7 +559,7 @@ class PeerRunsHTTPClient:
     def issue_invitation(
         self, *, room_id: str, home_install_id: str, authority_gateway_id: str,
         authority_epoch: int, member_id: str, grant_id: str, ttl_seconds: float = 3600,
-        status_ttl_seconds: float | None = None) -> Mapping[str, Any]:
+        status_ttl_seconds: float | None = None, replication: bool = False) -> Mapping[str, Any]:
         """Ask the target gateway to mint a scoped room-member grant."""
         if not self.api_key:
             raise PeerRunsHTTPError("issuing an invitation requires the target gateway API key")
@@ -569,6 +569,7 @@ class PeerRunsHTTPClient:
                 "room_id": room_id, "home_install_id": home_install_id,
                 "authority_gateway_id": authority_gateway_id, "authority_epoch": authority_epoch,
                 "member_id": member_id, "grant_id": grant_id, "ttl_seconds": ttl_seconds,
+                **({"replication": True} if replication else {}),
                 **({} if status_ttl_seconds is None else {
                     "status_ttl_seconds": status_ttl_seconds})})
 
@@ -599,6 +600,17 @@ class PeerRunsHTTPClient:
         """Verify gateway reachability and the live scoped capability catalog."""
         return self._request(
             "/v1/room-members/capabilities", room_grant=self._require_room_grant(grant))
+
+    def replicate_page(
+        self, *, grant: str, target_profile: str, room_id: str, room_name: str,
+        members: list[dict[str, Any]], page: dict[str, Any],
+    ) -> Mapping[str, Any]:
+        """Deliver history with a replica-enabled grant, never broad API auth."""
+        prefix = "" if target_profile == "default" else f"/p/{urllib.parse.quote(target_profile, safe='')}"
+        return self._scoped_post(
+            prefix + "/v1/room-members/replica", grant,
+            body={"room_id": room_id, "room_name": room_name, "members": members, "page": page},
+        )
 
     def _scoped_post(self, path: str, grant: str, *, body: dict[str, Any]) -> dict[str, Any]:
         return self._request(

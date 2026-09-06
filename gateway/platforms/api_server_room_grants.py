@@ -71,11 +71,13 @@ def _local_room_catalog(self, profile: str, installation_id: str) -> tuple[dict,
 
 
 def _http_routes(self) -> list[tuple[str, str, Any]]:
+    from gateway.platforms.api_server_room_replicas import http_routes
+
     return [
         ("POST", "/v1/room-members/invitations", self._handle_room_member_invitation),
         ("GET", "/v1/room-members/capabilities", self._handle_room_member_capabilities),
         ("POST", "/v1/room-members/grants/refresh", self._handle_room_member_grant_refresh),
-        ("POST", "/v1/room-members/grants/revoke", self._handle_room_member_grant_revoke)]
+        ("POST", "/v1/room-members/grants/revoke", self._handle_room_member_grant_revoke)] + http_routes(self)
 
 
 def _room_grant_token(request: "web.Request") -> str:
@@ -118,7 +120,7 @@ async def _handle_room_member_invitation(
     if error:
         return error
     required = set(_ROOM_IDENTITY_FIELDS)
-    allowed = required | {"grant_id", "ttl_seconds", "status_ttl_seconds"}
+    allowed = required | {"grant_id", "ttl_seconds", "status_ttl_seconds", "replication"}
     if set(body) - allowed or not required <= set(body):
         return _json_error(
             _openai_error, "Invitation is missing required room authority fields.",
@@ -127,6 +129,9 @@ async def _handle_room_member_invitation(
         from gateway import hosted_rooms
         from gateway.hosted_room_peer import decode_room_grant, issue_room_grant
         profile, target_install_id = _local_target(None, _api_request_profile)
+        replication = body.get("replication", False)
+        if type(replication) is not bool:
+            raise ValueError("replication must be a boolean")
         ttl = float(body.get("ttl_seconds", 3600))
         if not 60 <= ttl <= 24 * 60 * 60:
             raise ValueError("ttl_seconds must be between 60 and 86400")
@@ -139,6 +144,8 @@ async def _handle_room_member_invitation(
             grant_id=str(body.get("grant_id") or f"grant-{uuid.uuid4().hex}"),
             **_room_identity(body, coerce=True),
             target_install_id=target_install_id, target_profile=profile,
+            permissions=("approve", "dispatch", "status", "stop", "replicate") if replication else (
+                "approve", "dispatch", "status", "stop"),
             execution_policy_digest=execution_policy["policy_digest"], issued_at=time.time(),
             ttl_seconds=ttl, status_ttl_seconds=status_ttl)
         claims = decode_room_grant(self._room_grant_secret(), token, permission="status")

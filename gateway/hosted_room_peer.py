@@ -394,7 +394,7 @@ _GRANT_SCOPE = (
 _GRANT_FIELDS = frozenset({
     "version", *_GRANT_SCOPE, "execution_policy_digest", "permissions", "issued_at", "expires_at"})
 _GRANT_REFRESH_FIELDS = _GRANT_FIELDS | {"status_expires_at"}
-_GRANT_PERMISSIONS = {"approve", "dispatch", "status", "stop"}
+_GRANT_PERMISSIONS = {"approve", "dispatch", "status", "stop", "replicate"}
 MAX_DISPATCH_GRANT_TTL_SECONDS = 24 * 60 * 60
 MAX_STATUS_GRANT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -473,7 +473,7 @@ def decode_room_grant(secret: bytes, token: str, *, permission: str, now: float 
     lifetimes = (issued_at, expires_at, status_expires_at)
     if not (all(map(math.isfinite, lifetimes)) and issued_at < expires_at <= status_expires_at):
         raise HostedRoomGrantError("room grant lifetime is invalid")
-    operation_expires_at = status_expires_at if permission in {"approve", "status", "stop"} else expires_at
+    operation_expires_at = status_expires_at if permission in {"approve", "status", "stop", "replicate"} else expires_at
     if checked_now < issued_at - 30 or checked_now >= operation_expires_at:
         raise HostedRoomGrantError("room grant is expired or not active")
     if not isinstance(permissions := payload.get("permissions"), list) or permission not in permissions:
