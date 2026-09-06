@@ -59,7 +59,10 @@ class _RouteStatusPeerClient:
         on_unavailable,
         on_refreshed,
         grant=None,
+        capability_digest="",
+        execution_policy_digest="",
         before_admission=None,
+        resolve_observer_grant=None,
     ) -> None:
         self._client = client
         self._on_ready = on_ready
@@ -68,7 +71,10 @@ class _RouteStatusPeerClient:
         self._on_refreshed = on_refreshed
         self._initial_grant = grant
         self._current_grant = grant
+        self._capability_digest = str(capability_digest or "")
+        self._execution_policy_digest = str(execution_policy_digest or "")
         self._before_admission = before_admission
+        self._resolve_observer_grant = resolve_observer_grant
 
     def _notify(self, callback, grant):
         if self._initial_grant is None:
@@ -84,10 +90,21 @@ class _RouteStatusPeerClient:
 
         def tracked(*args, **kwargs):
             with _admission_preflight(name):
+                receipt_only = name == "recover_dispatch" and kwargs.get("receipt_only") is True
+                internal_observation = (
+                    self._resolve_observer_grant is not None
+                    and self._initial_grant is not None
+                    and kwargs.get("grant") in {self._initial_grant, self._current_grant}
+                    and (name in {"history", "status", "stop", "stop_receipt"} or receipt_only)
+                )
+                if internal_observation:
+                    self._current_grant = self._resolve_observer_grant(self._current_grant)
+                    kwargs = {**kwargs, "grant": self._current_grant}
                 observed_grant = kwargs.get("grant") or self._current_grant
                 if (
                     self._initial_grant is not None
                     and kwargs.get("grant") == self._initial_grant
+                    and name != "revoke_grant_exact"
                 ):
                     observed_grant = self._current_grant
                     kwargs = {**kwargs, "grant": observed_grant}
@@ -95,9 +112,11 @@ class _RouteStatusPeerClient:
                     name
                     in {
                         "dispatch",
+                        "probe",
                         "recover_dispatch",
                     }
                     and "grant" in kwargs
+                    and not (internal_observation and receipt_only)
                 ):
                     from gateway.hosted_room_peer import (
                         room_grant_needs_dispatch_refresh,
@@ -107,9 +126,16 @@ class _RouteStatusPeerClient:
                     if self._before_admission is not None:
                         self._before_admission(grant)
                     if room_grant_needs_dispatch_refresh(grant):
-                        checked = HostedMemberDispatch.from_mapping(kwargs["dispatch"])
-                        capability_digest = checked.capability_digest
-                        execution_policy_digest = checked.execution_policy_digest
+                        checked = (
+                            HostedMemberDispatch.from_mapping(kwargs["dispatch"])
+                            if "dispatch" in kwargs else None
+                        )
+                        capability_digest = (
+                            checked.capability_digest if checked is not None else self._capability_digest
+                        )
+                        execution_policy_digest = (
+                            checked.execution_policy_digest if checked is not None else self._execution_policy_digest
+                        )
                         refresh = getattr(self._client, "refresh_grant", None)
                         if callable(refresh):
                             try:
@@ -117,6 +143,7 @@ class _RouteStatusPeerClient:
                                     grant=grant,
                                     capability_digest=capability_digest,
                                     execution_policy_digest=execution_policy_digest,
+                                    **({"ttl_seconds": 3600} if name == "probe" else {}),
                                 )
                             except Exception as exc:
                                 if bool(getattr(exc, "needs_reauthorization", False)):
@@ -133,6 +160,7 @@ class _RouteStatusPeerClient:
                                     raise RuntimeError(
                                         "peer returned no refreshed room grant"
                                     )
+                                rotation_started = False
                                 try:
                                     refreshed_catalog = None
                                     if refreshed.get("catalog") is not None:
@@ -159,6 +187,9 @@ class _RouteStatusPeerClient:
                                                 error_code="room_capability_catalog_changed",
                                                 not_admitted=True,
                                             )
+                                    if self._before_admission is not None:
+                                        self._before_admission(grant)
+                                    rotation_started = True
                                     if self._initial_grant is None:
                                         self._on_refreshed(replacement, refreshed_catalog)
                                     else:
@@ -170,14 +201,13 @@ class _RouteStatusPeerClient:
                                             ).hexdigest(),
                                         )
                                         self._current_grant = replacement
-                                except Exception:
+                                except Exception as exc:
                                     revoke = getattr(
                                         self._client, "revoke_grant_exact", None
                                     )
                                     try:
-                                        self._notify(
-                                            self._on_reauthorization, observed_grant
-                                        )
+                                        if rotation_started or bool(getattr(exc, "needs_reauthorization", False)):
+                                            self._notify(self._on_reauthorization, observed_grant)
                                     except Exception:
                                         logger.warning(
                                             "Could not persist peer reauthorization status"
@@ -199,7 +229,18 @@ class _RouteStatusPeerClient:
                     if self._before_admission is not None:
                         self._before_admission(kwargs["grant"])
             try:
-                result = value(*args, **kwargs)
+                try:
+                    result = value(*args, **kwargs)
+                except PeerRunsHTTPError as exc:
+                    if not (internal_observation and name in {"history", "status"} and exc.needs_reauthorization):
+                        raise
+                    replacement = self._resolve_observer_grant(observed_grant)
+                    if replacement == observed_grant:
+                        raise
+                    # One read-only retry closes a rotation racing the first status request.
+                    self._current_grant = observed_grant = replacement
+                    kwargs = {**kwargs, "grant": replacement}
+                    result = value(*args, **kwargs)
             except Exception as exc:
                 if bool(getattr(exc, "needs_reauthorization", False)):
                     self._notify(self._on_reauthorization, observed_grant)
