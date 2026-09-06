@@ -513,10 +513,10 @@ class GroupChatSlashCommandsMixin:
                 if view == "bots" and len(words) != 2:
                     return f"Use `{rooms_command} {words[0]} bots`."
                 try:
-                    from gateway.hosted_room_messaging_files import try_room_menu
-                    if await try_room_menu(
+                    from gateway.hosted_room_messaging_files import try_bot_menu
+                    if await try_bot_menu(
                         self, event, service, room, rooms_command,
-                        view=view, bot_query=words[2] if view == "bot" else None,
+                        bot_query=words[2] if view == "bot" else None,
                     ):
                         return None
                 except ImportError:

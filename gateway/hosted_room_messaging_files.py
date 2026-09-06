@@ -1081,7 +1081,7 @@ def room_picker_callback(runner, event, backend, command, fallback):
     return selected, True
 
 
-async def try_room_menu(runner, event, backend, room, command, *, view="room", bot_query=None):
+async def try_room_menu(runner, event, backend, room, command):
     adapter = runner._adapter_for_source(event.source)
     if getattr(type(adapter), "supports_choice_pages", False) is not True:
         return False
@@ -1089,4 +1089,19 @@ async def try_room_menu(runner, event, backend, room, command, *, view="room", b
 
     menu = FilesMenu(runner, event, backend, command)
     await menu.bind(room_reference(room))
-    return await menu.send_page(await menu.room_page(view=view, bot_query=bot_query))
+    return await menu.send_page(await menu.room_page())
+
+
+async def try_bot_menu(runner, event, backend, room, command, *, bot_query=None):
+    """Additive consumer entry; older room-only consumers keep core Bot fallback."""
+    adapter = runner._adapter_for_source(event.source)
+    if getattr(type(adapter), "supports_choice_pages", False) is not True:
+        return False
+    from gateway.hosted_room_messaging import room_reference
+
+    menu = FilesMenu(runner, event, backend, command)
+    await menu.bind(room_reference(room))
+    page = await menu.room_page(
+        view="bots" if bot_query is None else "bot", bot_query=bot_query,
+    )
+    return await menu.send_page(page)

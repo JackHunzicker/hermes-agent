@@ -3,8 +3,9 @@
 import builtins
 import copy
 import sqlite3
+import sys
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -123,9 +124,12 @@ async def test_typed_and_button_bot_paths_share_back_navigation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verb", ["bots", "bot 1"])
-@pytest.mark.parametrize("fallback", ["old", "dynamic", "unknown", "missing", "plain", "send_failed"])
+@pytest.mark.parametrize("fallback", [
+    "old", "dynamic", "unknown", "missing", "old_consumer", "plain", "send_failed",
+])
 async def test_direct_bot_command_retains_core_fallback(remote, monkeypatch, verb, fallback):
     runner, adapter = remote.runner, remote.adapter
+    old_room_calls = []
     if fallback in {"old", "dynamic", "unknown"}:
         monkeypatch.delattr(type(adapter), "supports_choice_pages")
         if fallback == "old":
@@ -134,6 +138,15 @@ async def test_direct_bot_command_retains_core_fallback(remote, monkeypatch, ver
             monkeypatch.setattr(adapter, "supports_choice_pages", True, raising=False)
     elif fallback == "missing":
         block_imports(monkeypatch, "gateway.hosted_room_messaging_files")
+    elif fallback == "old_consumer":
+        old_consumer = ModuleType("gateway.hosted_room_messaging_files")
+
+        async def try_room_menu(runner, event, backend, room, command):
+            old_room_calls.append(room["messaging_ref"])
+            return False
+
+        old_consumer.try_room_menu = try_room_menu
+        monkeypatch.setitem(sys.modules, old_consumer.__name__, old_consumer)
     elif fallback == "plain":
         monkeypatch.setattr(adapter, "send_choice_picker", None)
     else:
@@ -153,6 +166,11 @@ async def test_direct_bot_command_retains_core_fallback(remote, monkeypatch, ver
         assert "Barry" in result
     assert "/group 2044" in result
     assert not adapter.documents
+    if fallback == "old_consumer":
+        assert not old_room_calls
+        result = await runner._handle_rooms_command(event("/group 2044"))
+        assert "Workshop release" in result and "Barry" in result
+        assert old_room_calls == [2044]
 
 
 @pytest.mark.asyncio
