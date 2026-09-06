@@ -164,12 +164,16 @@ def test_roomlink_and_run_route_tuples_are_shard_owned():
     room_routes = api_server_room_grants._http_routes(adapter)
     run_routes = api_server_runs._http_routes(adapter)
 
-    assert [(method, path) for method, path, _ in room_routes] == [
+    legacy_room_routes = [
         ("POST", "/v1/room-members/invitations"),
         ("GET", "/v1/room-members/capabilities"),
         ("POST", "/v1/room-members/grants/refresh"),
         ("POST", "/v1/room-members/grants/revoke"),
     ]
+    room_handlers = {(method, path): handler for method, path, handler in room_routes}
+    assert set(legacy_room_routes) <= room_handlers.keys()
+    assert ("POST", "/v1/room-members/replica") in room_handlers
+    assert len(room_handlers) == len(room_routes)
     assert [(method, path) for method, path, _ in run_routes] == [
         ("POST", "/v1/runs"),
         ("GET", "/v1/runs/{run_id}"),
@@ -178,5 +182,5 @@ def test_roomlink_and_run_route_tuples_are_shard_owned():
         ("POST", "/v1/runs/{run_id}/steer"),
         ("POST", "/v1/runs/{run_id}/stop"),
     ]
-    assert all(handler.__self__ is adapter for _, _, handler in room_routes)
+    assert all(room_handlers[key].__self__ is adapter for key in legacy_room_routes)
     assert all(handler.__self__ is adapter for _, _, handler in run_routes)
