@@ -15,8 +15,11 @@ SECRET = b"replica-test-secret-not-a-real-credential"
 HOME = "install:home"
 TARGET = "install:target"
 MEMBERS = [
-    {"member_id": "writer", "profile": "default", "target": {"gateway_id": HOME, "profile": "default"}},
-    {"member_id": "reviewer", "profile": "reviewer", "target": {"gateway_id": TARGET, "profile": "reviewer"}},
+    {"member_id": "writer", "profile": "default", "handle": "writer", "target": {"kind": "local", "profile": "default"}},
+    {"member_id": "reviewer", "profile": "reviewer", "handle": "reviewer", "target": {
+        "kind": "peer", "peer_id": "peer-reviewer", "installation_id": TARGET,
+        "profile": "reviewer", "capability_digest": "b" * 64,
+    }},
 ]
 
 
