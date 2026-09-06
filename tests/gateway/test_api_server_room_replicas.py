@@ -136,3 +136,31 @@ async def test_near_limit_unicode_page_passes_through_real_replica_transport(set
         result = await asyncio.to_thread(sender.replicate_page, grant=token, target_profile="default", **body)
         assert result["stored_seq"] == page["latest_seq"]
         assert replicas.replica_state(target, room_id="room")["last_seq"] == page["latest_seq"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_suffix", ["", "/p/reviewer"])
+async def test_replica_transport_addresses_named_profile_exactly_once(base_suffix):
+    app = web.Application()
+
+    async def accept(request):
+        assert request.headers["Authorization"] == "HermesRoom disposable-scoped-token"
+        return web.json_response({"path": request.path})
+
+    app.router.add_post("/p/reviewer/v1/room-members/replica", accept)
+    async with TestClient(TestServer(app)) as http:
+        client = PeerRunsHTTPClient(base_url=str(http.make_url(base_suffix or "/")), api_key="")
+        result = await asyncio.to_thread(
+            client.replicate_page, grant="disposable-scoped-token", target_profile="reviewer",
+            room_id="room", room_name="Workshop", members=[], page={},
+        )
+        assert result["path"] == "/p/reviewer/v1/room-members/replica"
+
+
+def test_replica_transport_refuses_conflicting_saved_profile_before_network():
+    client = PeerRunsHTTPClient(base_url="http://127.0.0.1:9/p/another", api_key="")
+    with pytest.raises(ValueError, match="profile"):
+        client.replicate_page(
+            grant="disposable-scoped-token", target_profile="reviewer",
+            room_id="room", room_name="Workshop", members=[], page={},
+        )

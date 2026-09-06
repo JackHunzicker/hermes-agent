@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from gateway.hosted_room_peer import (
-    GatewayRoomCatalog, HostedMemberDispatch, validate_room_link_url)
+    GatewayRoomCatalog, HostedMemberDispatch, validate_room_link_url, room_link_profile_url)
 
 
 logger = logging.getLogger(__name__)
@@ -280,11 +280,13 @@ class PeerRunsHTTPClient:
     def _request(
         self, path: str, *, method: str = "GET", body: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None, room_grant: str | None = None,
-        ensure_ascii: bool = True) -> dict[str, Any]:
+        ensure_ascii: bool = True, request_profile: str | None = None) -> dict[str, Any]:
         from hermes_cli.urllib_security import open_credentialed_url
         deadline, ambiguous = time.monotonic() + self.timeout_seconds, method == "POST"
+        url = self._request_url(path) if request_profile is None else room_link_profile_url(
+            self._request_url(""), path, request_profile)
         request = urllib.request.Request(
-            f"{self.base_url}{path}", method=method,
+            url, method=method,
             data=None if body is None else json.dumps(body, separators=(",", ":"), ensure_ascii=ensure_ascii).encode("utf-8"),
             headers={
                 "Authorization": (
@@ -609,16 +611,18 @@ class PeerRunsHTTPClient:
         members: list[dict[str, Any]], page: dict[str, Any],
     ) -> Mapping[str, Any]:
         """Deliver history with a replica-enabled grant, never broad API auth."""
-        prefix = "" if target_profile == "default" else f"/p/{urllib.parse.quote(target_profile, safe='')}"
         return self._request(
-            prefix + "/v1/room-members/replica", method="POST",
-            room_grant=self._require_room_grant(grant), ensure_ascii=False,
+            "/v1/room-members/replica", method="POST",
+            room_grant=self._require_room_grant(grant), ensure_ascii=False, request_profile=target_profile,
             body={"room_id": room_id, "room_name": room_name, "members": members, "page": page},
         )
 
     def _scoped_post(self, path: str, grant: str, *, body: dict[str, Any]) -> dict[str, Any]:
         return self._request(
             path, method="POST", body=body, room_grant=self._require_room_grant(grant))
+
+    def _request_url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
 
     @staticmethod
     def _require_room_grant(grant: str) -> str:
