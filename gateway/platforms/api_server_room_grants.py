@@ -85,6 +85,7 @@ def _local_room_catalog(self, profile: str, installation_id: str) -> tuple[dict,
 
 def _http_routes(self) -> list[tuple[str, str, Any]]:
     from gateway.platforms import api_server_room_attachments, api_server_room_artifacts, api_server_room_controls
+    from gateway.platforms.api_server_room_replicas import http_routes
 
     async def revoke_exact(request):
         from gateway.platforms import api_server
@@ -118,7 +119,7 @@ def _http_routes(self) -> list[tuple[str, str, Any]]:
             self._handle_room_member_grant_revoke,
         ),
         ("POST", "/v1/room-members/grants/revoke-exact", revoke_exact),
-    ] + api_server_room_controls._http_routes(self) + api_server_room_attachments._http_routes(self) + api_server_room_artifacts._http_routes(self)
+    ] + api_server_room_controls._http_routes(self) + api_server_room_attachments._http_routes(self) + api_server_room_artifacts._http_routes(self) + http_routes(self)
 
 
 def _room_grant_token(request: "web.Request") -> str:
@@ -177,7 +178,7 @@ async def _handle_room_member_invitation(
         "authority_epoch",
         "member_id",
     }
-    allowed = required | {"grant_id", "ttl_seconds", "status_ttl_seconds"}
+    allowed = required | {"grant_id", "ttl_seconds", "status_ttl_seconds", "replication"}
     if set(body) - allowed or not required <= set(body):
         return web.json_response(
             _openai_error(
@@ -194,6 +195,9 @@ async def _handle_room_member_invitation(
         )
 
         profile, target_install_id = _local_target(None, _api_request_profile)
+        replication = body.get("replication", False)
+        if type(replication) is not bool:
+            raise ValueError("replication must be a boolean")
         ttl = float(body.get("ttl_seconds", 3600))
         if not 60 <= ttl <= 24 * 60 * 60:
             raise ValueError("ttl_seconds must be between 60 and 86400")
@@ -215,6 +219,8 @@ async def _handle_room_member_invitation(
             member_id=str(body["member_id"]),
             target_install_id=target_install_id,
             target_profile=profile,
+            permissions=("approve", "attachment.stage", "artifact.ack", "artifact.read", "dispatch", "status", "stop")
+            + (("replicate",) if replication else ()),
             execution_policy_digest=execution_policy["policy_digest"],
             issued_at=time.time(),
             ttl_seconds=ttl,

@@ -406,7 +406,7 @@ _GRANT_SCOPE = (
 _GRANT_FIELDS = frozenset({
     "version", *_GRANT_SCOPE, "execution_policy_digest", "permissions", "issued_at", "expires_at"})
 _GRANT_REFRESH_FIELDS = _GRANT_FIELDS | {"status_expires_at"}
-_GRANT_PERMISSIONS = {"approve", "attachment.stage", "artifact.ack", "artifact.read", "dispatch", "status", "stop"}
+_GRANT_PERMISSIONS = {"approve", "attachment.stage", "artifact.ack", "artifact.read", "dispatch", "status", "stop", "replicate"}
 MAX_DISPATCH_GRANT_TTL_SECONDS = 24 * 60 * 60
 MAX_STATUS_GRANT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -510,7 +510,7 @@ def decode_room_grant(
         raise HostedRoomGrantError("room grant lifetime is invalid")
     operation_expires_at = (
         status_expires_at
-        if permission in {"approve", "status", "stop"}
+        if permission in {"approve", "status", "stop", "replicate"}
         else expires_at
     )
     if (

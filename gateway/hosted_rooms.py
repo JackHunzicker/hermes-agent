@@ -13,7 +13,7 @@ import re
 import sqlite3
 import secrets
 import time
-from contextlib import closing
+from contextlib import closing, nullcontext
 from functools import partial
 from pathlib import Path
 from typing import Any, Mapping
@@ -934,7 +934,11 @@ def restore_peer_room_reservations(
         )
 
 
-def _read_one(db_path: DbPath, sql: str, params: tuple[Any, ...]) -> sqlite3.Row | None:
+def _read_one(
+    db_path: DbPath, sql: str, params: tuple[Any, ...], *, _conn: sqlite3.Connection | None = None,
+) -> sqlite3.Row | None:
+    if _conn is not None:
+        return _conn.execute(sql, params).fetchone()
     with _transaction(db_path) as conn:
         return conn.execute(sql, params).fetchone()
 
@@ -945,13 +949,17 @@ def peer_room_is_reserved(db_path: DbPath, *, room_id: str, target_profile: str,
     return _read_one(db_path, _SELECT_LIVE_RESERVATION, params) is not None
 
 
-def peer_room_grant_is_current(db_path: DbPath, *, claims: Mapping[str, Any], now: float | None = None) -> bool:
+def peer_room_grant_is_current(
+    db_path: DbPath, *, claims: Mapping[str, Any], now: float | None = None,
+    _conn: sqlite3.Connection | None = None,
+) -> bool:
     """Require a grant to match the target's current live reservation."""
     timestamp = _now(now)
     return _read_one(
         db_path, """SELECT 1 FROM hosted_room_peer_reservations WHERE room_id=? AND member_id=?
             AND target_profile=? AND authority_gateway_id=? AND authority_epoch=?
-            AND expires_at>? AND revoked_at IS NULL LIMIT 1""", (*_reservation_claims(claims), timestamp)) is not None
+            AND expires_at>? AND revoked_at IS NULL LIMIT 1""", (*_reservation_claims(claims), timestamp),
+        _conn=_conn) is not None
 
 
 def room_grant_is_revoked(
@@ -959,13 +967,14 @@ def room_grant_is_revoked(
     *,
     claims: Mapping[str, Any],
     now: float | None = None,
+    _conn: sqlite3.Connection | None = None,
 ) -> bool:
     """Return whether a grant predates its exact scope's revocation fence."""
     timestamp = float(now if now is not None else time.time())
     scope_key = _room_grant_scope_key(claims)
     issued_at = float(claims.get("issued_at") or 0)
     grant_id = _room_grant_id(claims)
-    with _transaction(db_path) as conn:
+    with (nullcontext(_conn) if _conn is not None else _transaction(db_path)) as conn:
         exact_token = conn.execute(
             """SELECT 1 FROM hosted_room_revoked_grant_tokens
                  WHERE scope_key=? AND token_sha256=? AND expires_at>?""",
