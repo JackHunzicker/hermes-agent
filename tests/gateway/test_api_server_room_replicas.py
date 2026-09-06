@@ -18,8 +18,11 @@ from tui_gateway.hosted_room_peer_http import PeerRunsHTTPClient, PeerRunsHTTPEr
 HOME = "install:home"
 TARGET = "install:target"
 KEY = "disposable-api-key-for-loopback-only"
-MEMBERS = [{"member_id": "reviewer", "profile": "default", "target": {
-    "gateway_id": TARGET, "profile": "default",
+MEMBERS = [{"member_id": "writer", "profile": "default", "handle": "writer", "target": {
+    "kind": "local", "profile": "default",
+}}, {"member_id": "reviewer", "profile": "default", "handle": "reviewer", "target": {
+    "kind": "peer", "peer_id": "peer-reviewer", "installation_id": TARGET,
+    "profile": "default", "capability_digest": "b" * 64,
 }}]
 
 

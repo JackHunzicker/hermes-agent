@@ -36,9 +36,11 @@ def ingest_granted_page(
         member for member in members if isinstance(member, dict)
         and member.get("member_id") == claims["member_id"]
     ] if isinstance(members, list) else []
-    if len(matching) != 1 or matching[0].get("target") != {
-        "gateway_id": target_install_id, "profile": target_profile,
-    }:
+    target = matching[0].get("target") if len(matching) == 1 else None
+    if (
+        not isinstance(target, dict) or target.get("kind") != "peer"
+        or target.get("installation_id") != target_install_id or target.get("profile") != target_profile
+    ):
         raise HostedRoomGrantError("replica does not name the authorized participant")
 
     def authorize_locked(conn: sqlite3.Connection) -> None:
