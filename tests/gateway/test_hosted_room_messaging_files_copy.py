@@ -77,6 +77,7 @@ def test_all_files_catalogs_render_values_without_fallback_or_missing_fields(mon
         "producer": files.label("[author](url)"), "date": "2026-09-04 08:12",
         "size": "11.0 MB", "caption": "caption", "command": "`/group 1 file abcdef12 confirm`",
         "files": "`/group 1 files`", "file": "`file <file-id>`", "reply": "`reply`",
+        "current": "2", "total": "8",
     }
     for key in keys:
         assert key in catalog
