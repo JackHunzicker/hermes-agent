@@ -127,11 +127,9 @@ async def _handle_room_member_invitation(
             code="invalid_room_invitation", status=400)
     try:
         from gateway import hosted_rooms
-        from gateway.hosted_room_peer import decode_room_grant, issue_room_grant
+        from gateway.hosted_room_peer import decode_room_grant, issue_room_grant, invitation_permissions
         profile, target_install_id = _local_target(None, _api_request_profile)
-        replication = body.get("replication", False)
-        if type(replication) is not bool:
-            raise ValueError("replication must be a boolean")
+        permissions = invitation_permissions(body.get("replication", False))
         ttl = float(body.get("ttl_seconds", 3600))
         if not 60 <= ttl <= 24 * 60 * 60:
             raise ValueError("ttl_seconds must be between 60 and 86400")
@@ -144,8 +142,7 @@ async def _handle_room_member_invitation(
             grant_id=str(body.get("grant_id") or f"grant-{uuid.uuid4().hex}"),
             **_room_identity(body, coerce=True),
             target_install_id=target_install_id, target_profile=profile,
-            permissions=("approve", "dispatch", "status", "stop", "replicate") if replication else (
-                "approve", "dispatch", "status", "stop"),
+            permissions=permissions,
             execution_policy_digest=execution_policy["policy_digest"], issued_at=time.time(),
             ttl_seconds=ttl, status_ttl_seconds=status_ttl)
         claims = decode_room_grant(self._room_grant_secret(), token, permission="status")

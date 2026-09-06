@@ -119,6 +119,36 @@ def test_capabilities_and_invitation_advertise_scoped_roomlink(home, monkeypatch
     )
 
 
+@pytest.mark.parametrize("opt_in", [False, True])
+def test_rpc_invitation_requires_explicit_replication_opt_in(home, opt_in):
+    from gateway.hosted_room_peer import decode_room_grant, gateway_room_grant_secret, HostedRoomGrantError
+
+    capabilities = _result(srv._methods["groups.capabilities"](1, {}))
+    assert "authenticated_replication" in capabilities["features"]
+    invitation = _result(srv._methods["groups.peer.invite"](2, {
+        "room_id": "replica-opt-in", "home_install_id": "install:home",
+        "authority_gateway_id": "install:home", "authority_epoch": 1,
+        "member_id": "member-peer", "replication": opt_in,
+    }))
+    if opt_in:
+        claims = decode_room_grant(gateway_room_grant_secret(), invitation["grant"], permission="replicate")
+        assert claims["room_id"] == "replica-opt-in"
+    else:
+        with pytest.raises(HostedRoomGrantError, match="does not allow"):
+            decode_room_grant(gateway_room_grant_secret(), invitation["grant"], permission="replicate")
+
+
+@pytest.mark.parametrize("value", [1, "true", None, {}])
+def test_rpc_invitation_rejects_ambiguous_replication_opt_in(home, value):
+    result = srv._methods["groups.peer.invite"](2, {
+        "room_id": "replica-opt-in", "home_install_id": "install:home",
+        "authority_gateway_id": "install:home", "authority_epoch": 1,
+        "member_id": "member-peer", "replication": value,
+    })
+    assert result["error"]["code"] == 4120
+    assert "replication must be a boolean" in result["error"]["message"]
+
+
 def test_capabilities_disable_roomlink_when_run_replay_is_not_durable(
     home, monkeypatch
 ):

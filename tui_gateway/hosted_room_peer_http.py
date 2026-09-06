@@ -562,6 +562,8 @@ class PeerRunsHTTPClient:
         authority_epoch: int, member_id: str, grant_id: str, ttl_seconds: float = 3600,
         status_ttl_seconds: float | None = None, replication: bool = False) -> Mapping[str, Any]:
         """Ask the target gateway to mint a scoped room-member grant."""
+        if type(replication) is not bool:
+            raise ValueError("replication must be a boolean")
         if not self.api_key:
             raise PeerRunsHTTPError("issuing an invitation requires the target gateway API key")
         return self._request(
