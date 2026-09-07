@@ -1,6 +1,7 @@
 """Final renderer captions stay distinct for valid canonical file shares."""
 
 from copy import deepcopy
+from datetime import datetime
 import sys
 from types import ModuleType
 
@@ -72,6 +73,31 @@ def telegram_labels(page, count):
     return [button.text for button in buttons], [button.callback_data for button in buttons]
 
 
+def assert_plain_file_versions(menu, items, *, precision=""):
+    from gateway.hosted_room_file_lookup import selection_digest
+    from hermes_time import get_timezone
+
+    blocks = menu.plain_files().split("\n\n")[1:len(items) + 1]
+    assert len(blocks) == len(items)
+    descriptions = [block.rsplit("\n", 1)[0] for block in blocks]
+    assert len(set(descriptions)) == len(items)
+    for item, block, description in zip(items, blocks, descriptions):
+        name = files._clip_caption_part(files.label(item["name"], len(item["name"])), 80)
+        assert name in description
+        instant = datetime.fromtimestamp(item["shared_at"], get_timezone())
+        metadata = files.text(
+            "file_metadata", producer=files.label(item["producer"]["label"], 20),
+            date=instant.strftime(files.text("date_format") + precision),
+            size=files.size_label(item["size"]),
+        )
+        assert metadata in description
+        code = selection_digest(menu.room, item)[:64 if menu.long_codes else 8]
+        command = f"`{menu.command} {menu.reference} file {code}`"
+        assert block.splitlines()[-1] == files.text(
+            "command_hint", caption=files.text("download"), command=command,
+        )
+
+
 @pytest.mark.asyncio
 async def test_real_batches_preserve_filename_tail_after_final_100_character_budget(consumer):
     state, _, _ = consumer
@@ -86,7 +112,7 @@ async def test_real_batches_preserve_filename_tail_after_final_100_character_bud
     assert [menu.actions[choice["value"]][1][0] for choice in page.choices[:4]] == items
     assert len(set(captions)) == 4
     assert all(item["name"][-4:] in caption for item, caption in zip(items, captions))
-    assert all(caption in menu.plain_files() for caption in captions)
+    assert_plain_file_versions(menu, items, precision=":%S.%f %z")
 
 
 @pytest.mark.asyncio
@@ -101,7 +127,9 @@ async def test_real_telegram_markup_preserves_distinct_versions_at_64_characters
     assert len(set(actions)) == 2
     assert len(set(captions)) == 2
     assert all(len(caption) <= 64 for caption in captions)
-    assert all(caption in menu.plain_files() for caption in captions)
+    assert_plain_file_versions(
+        menu, menu.pages[0]["items"], precision=":%S" if spacing else ":%S.%f %z",
+    )
     assert [menu.actions[choice["value"]][1][0] for choice in page.choices[:2]] == menu.pages[0]["items"]
 
 
@@ -157,7 +185,7 @@ async def test_actual_residual_collisions_reuse_unique_codes_that_survive_telegr
         else:
             assert caption.startswith("ordinary.md") and "[" not in caption
     assert [menu.actions[choice["value"]][1][0] for choice in page.choices[:3]] == expected
-    assert all(caption in menu.plain_files() for caption in captions)
+    assert_plain_file_versions(menu, expected)
 
 
 @pytest.mark.asyncio
@@ -178,7 +206,7 @@ async def test_all_locale_final_captions_keep_the_same_exact_selections(consumer
                 if platform == Platform.SIGNAL else telegram_labels(page, 4)[0])
     assert len(set(captions)) == 4
     assert all("13:42:07" in caption for caption in captions)
-    assert all(caption in menu.plain_files() for caption in captions)
+    assert_plain_file_versions(menu, expected, precision=":%S.%f %z")
     assert [menu.actions[choice["value"]][1][0] for choice in page.choices[:4]] == expected
     assert menu.source_key == source_key == files._source_key(menu.runner, menu.event)
 
