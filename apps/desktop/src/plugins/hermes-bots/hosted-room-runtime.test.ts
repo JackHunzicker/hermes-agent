@@ -180,7 +180,8 @@ describe('hosted Group Chat runtime', () => {
     loaded.runtime.stopHostedRoomRuntime()
   })
 
-  it('loads canonical projection and read state without rewriting the original log', async () => {
+  it('refreshes canonical history and read state at bounded idle intervals with an unchanged summary', async () => {
+    let throughSeq = 0
     const descriptor = { room_id: 'room-1', name: 'History', authority_gateway_id: 'install:home', authority_epoch: 1, members: MEMBERS, latest_seq: 2 }
     const projection = { event_id: 'original', seq: 1, thread_id: 'thread', actor: { kind: 'user', id: 'desktop' }, original_text: ' original\n', text: ' edited\n', revision: 2, deleted: false, attachments: [], reactions: [] }
 
@@ -193,9 +194,9 @@ describe('hosted Group Chat runtime', () => {
 
       if (method === 'groups.log') {return { events: [hostedEvent(1, 'original', 'message.user', { text: ' original\n', thread_id: 'thread' }, { kind: 'user', id: 'desktop' }), hostedEvent(2, 'mutation', 'message.edited', { target_event_id: 'original', text: ' edited\n', thread_id: 'thread' }, { kind: 'user', id: 'desktop' })], latest_seq: 2, has_more: false }}
 
-      if (method === 'groups.history') {return { messages: [projection], snapshot_seq: 2, cursor: 2, has_more: false }}
+      if (method === 'groups.history') {return { messages: [{ ...projection }], snapshot_seq: 2, cursor: 2, has_more: false }}
 
-      if (method === 'groups.read.get') {return { room_id: 'room-1', thread_id: null, through_seq: 0, latest_seq: 2, unread_count: 1, reader: { kind: 'user', id: 'desktop' } }}
+      if (method === 'groups.read.get') {return { room_id: 'room-1', thread_id: null, through_seq: throughSeq, latest_seq: 2, unread_count: 1, reader: { kind: 'user', id: 'desktop' } }}
       throw new Error(`unexpected method: ${method}`)
     })
 
@@ -205,6 +206,18 @@ describe('hosted Group Chat runtime', () => {
     expect(current.hostedHistory?.messages.original).toEqual(projection)
     expect(current.log[0].text).toBe(' original\n')
     expect(current.hostedRead?.unread_count).toBe(1)
+    // Another client can change read state without changing the room summary.
+    projection.text = ' changed elsewhere\n'
+    projection.revision = 3
+    throughSeq = 2
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(loaded.calls.filter(call => call.method === 'groups.history')).toHaveLength(1)
+    expect(loaded.calls.filter(call => call.method === 'groups.read.get')).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(loaded.chat.$groupChats.get().History.hostedRead?.through_seq).toBe(2)
+    expect(loaded.chat.$groupChats.get().History.hostedHistory?.messages.original.text).toBe(' changed elsewhere\n')
+    expect(loaded.calls.filter(call => call.method === 'groups.history')).toHaveLength(2)
+    expect(loaded.calls.filter(call => call.method === 'groups.read.get')).toHaveLength(2)
     loaded.runtime.stopHostedRoomRuntime()
   })
 

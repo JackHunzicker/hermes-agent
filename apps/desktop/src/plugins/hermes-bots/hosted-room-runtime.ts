@@ -112,7 +112,8 @@ const HOSTED_ROOM_UNSUPPORTED_REPROBE_MS = 30_000
 
 export const $hostedRoomOutbox = atom<HostedRoomOutbox>(createHostedRoomOutbox())
 
-const hostedRoomPollCache = new Map<string, string>()
+const hostedRoomPollCache = new Map<string, { fingerprint: string; refreshedAt: number }>()
+const HOSTED_ROOM_IDLE_HISTORY_REFRESH_MS = 30_000
 const hostedRoomPollGenerations = new Map<string, number>()
 const hostedRoomMutationGenerations = new Map<string, number>()
 const hostedRoomLocallyDeleted = new Set<string>()
@@ -404,12 +405,18 @@ export function shouldRefreshHostedRoom(room: GroupChat | undefined, listed: unk
     $hostedRoomOutbox.get().commands.some(command => command.roomId === room.roomId && command.status !== 'failed')
 
   const fingerprint = hostedRoomPollFingerprint(listed)
+  const cached = hostedRoomPollCache.get(String(room.roomId || ''))
+
+  // Read cursors and history projections can change outside summary revisions.
+  const historyExpired = Boolean(room.hostedHistory || room.hostedRead) &&
+    Date.now() - (cached?.refreshedAt ?? 0) >= HOSTED_ROOM_IDLE_HISTORY_REFRESH_MS
 
   return (
     active ||
     room.hostedMembersNeedRefresh ||
     (Boolean(groupChatHostedGateway(room)) && !room.hostedMembersVerified) ||
-    hostedRoomPollCache.get(String(room.roomId || '')) !== fingerprint
+    historyExpired ||
+    cached?.fingerprint !== fingerprint
   )
 }
 
@@ -923,7 +930,7 @@ export async function refreshHostedRooms() {
           (!reconnectMemberId || Boolean(reconnectUpdateConnectionId)) &&
           Number(hostedRoomPollGenerations.get(roomId) || 0) === pollGeneration
         ) {
-          hostedRoomPollCache.set(roomId, hostedRoomPollFingerprint(listedRoom))
+          hostedRoomPollCache.set(roomId, { fingerprint: hostedRoomPollFingerprint(listedRoom), refreshedAt: Date.now() })
 
           if (includeDisbanded) {
             caughtUpDisbandedIds.add(roomId)
