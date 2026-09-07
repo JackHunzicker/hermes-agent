@@ -820,6 +820,11 @@ def apply_pending_decision(
                 return {"resolved": 1}
             raise MessagingApprovalTerminalError(str(command["result_text"]))
         _require_observer_lease(conn, pending, now=time.time())
+        if "requested_thread_id" in pending:
+            from gateway.hosted_room_scoped_controls import require_active_task
+            require_active_task(conn, room_id=pending["room_id"], member_id=pending["member_id"],
+                thread_id=pending["requested_thread_id"], task_id=pending["task_id"],
+                execution_generation=pending["execution_generation"])
         if command["application_started_at"] is None:
             from gateway import hosted_room_approval_rules as rules
 

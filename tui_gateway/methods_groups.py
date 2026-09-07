@@ -590,7 +590,8 @@ def _(rid, params: dict, service) -> dict:
         str(params.get("room_id") or ""), member_id=str(params.get("member_id") or ""),
         task_id=str(params.get("task_id") or ""),
         execution_generation=int(params.get("execution_generation") or 0),
-        choice=str(params.get("choice") or ""), request_id=str(params.get("request_id") or ""))
+        choice=str(params.get("choice") or ""), request_id=str(params.get("request_id") or ""),
+        **({"thread_id": str(params["thread_id"])} if "thread_id" in params else {}))
     return _ok(rid, {"approved": True, "result": result})
 
 

@@ -531,9 +531,15 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
         stored_action = (
             {**action, "member_id": member_id} if action is not None else None
         )
+        if stored_action is not None and stored_action.get("kind") == "input":
+            supported = not self._member_is_peer(room_id, member_id)
+            stored_action["input_supported"] = supported
+            if not supported:
+                stored_action["unsupported_reason"] = "scoped_input_unsupported_for_peer"
         if stored_action is not None and stored_action.get("kind") in {
             "approval",
             "approval_clear",
+            "input",
         }:
             profile = ""
             try:
@@ -687,6 +693,11 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
             with self._policy_lock:
                 if self._pending_actions.get(key) == previous_action:
                     self._pending_actions.pop(key, None)
+        elif changed and stored_action.get("kind") == "input" and (previous_action or {}).get("kind") == "approval":
+            approvals.clear_pending_approval(self.db_path, room_id=room_id, member_id=member_id,
+                request_id=previous_action.get("request_id"),
+                authority_gateway_id=previous_action.get("authority_gateway_id"),
+                authority_epoch=previous_action.get("authority_epoch"))
         elif changed and stored_action.get("kind") == "approval":
             try:
                 approvals.persist_pending_approval(
@@ -1029,6 +1040,7 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
         choice: str,
         request_id: str | None = None,
         command_id: str | None = None,
+        thread_id: str | None = None,
     ) -> Mapping[str, Any]:
         """Resolve one exact local or peer approval and wake room observation."""
         key = (room_id, member_id)
@@ -1136,7 +1148,8 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
 
         result = approvals.apply_pending_decision(
             self.db_path,
-            pending={**action, "room_id": room_id, "member_id": member_id},
+            pending={**action, "room_id": room_id, "member_id": member_id,
+                     **({"requested_thread_id": thread_id} if thread_id is not None else {})},
             choice=choice,
             apply=apply,
             command_id=command_id,
@@ -1197,7 +1210,8 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
         return {
             "running": runtime["running"], "working": any(counts.get(s) for s in _LIVE_STATUSES),
             "blocked": room_id in runtime["blocked_rooms"]
-            or bool(counts.get("indeterminate") or counts.get("stopping")),
+            or bool(counts.get("indeterminate") or counts.get("stopping"))
+            or any(action.get("kind") in {"input", "approval"} for action in pending_actions),
             "counts": dict(counts), "pending_actions": pending_actions,
             "needs_attention": bool(pending_actions),
             "replication": runtime["replication"],

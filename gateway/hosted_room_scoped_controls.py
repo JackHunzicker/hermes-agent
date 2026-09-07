@@ -75,3 +75,21 @@ def task_receipt(task):
             "task_id": identity.task_id, "status": task["status"],
             "execution_generation": int(task["execution_generation"]),
             "cancel_generation": int(task["cancel_generation"])}
+
+
+def require_active_task(conn, *, room_id, member_id, thread_id, task_id, execution_generation):
+    from gateway import hosted_room_driver as state
+    row = conn.execute("SELECT * FROM hosted_room_driver_tasks WHERE room_id=? AND task_id=?",
+        (room_id, task_id)).fetchone()
+    if row is None:
+        raise ValueError("scoped_task_not_found")
+    task = state._task_from_row(row)
+    if (task["identity"].thread_id != thread_id or task["execution_generation"] != execution_generation
+        or task["status"] != "running"
+        or task["payload"].get("target_member_id", task["payload"].get("target_profile")) != member_id):
+        raise ValueError("scoped_task_attempt_changed")
+    room_stop = conn.execute("SELECT MAX(seq) FROM hosted_room_events WHERE room_id=? AND kind='room.stop_requested'",
+        (room_id,)).fetchone()[0]
+    if int(room_stop or 0) > int(task["payload"]["source_event_seq"]) or pending_stop(conn, task) is not None:
+        raise ValueError("scoped_task_stopped")
+    return task

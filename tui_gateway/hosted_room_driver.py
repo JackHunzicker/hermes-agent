@@ -527,6 +527,7 @@ class HostedRoomRuntime:
         )
         action = {
             "kind": "approval_clear",
+            "thread_id": task["identity"].thread_id,
             "authority_gateway_id": binding.gateway_id,
             "authority_epoch": binding.authority_epoch,
             "task_id": task["identity"].task_id,
@@ -563,6 +564,7 @@ class HostedRoomRuntime:
                 safe_approval.pop("remember_context", None)
             action = {
                 "kind": "approval",
+                "thread_id": task["identity"].thread_id,
                 "authority_gateway_id": binding.gateway_id,
                 "authority_epoch": binding.authority_epoch,
                 "task_id": task["identity"].task_id,
@@ -574,6 +576,11 @@ class HostedRoomRuntime:
                 "request_id": safe_approval.get("request_id"),
                 "approval": safe_approval,
             }
+        pending_input = info.get("pending_input")
+        if isinstance(pending_input, Mapping):
+            action = {**action, "kind": "input", "request_id": pending_input.get("request_id"),
+                      "input": dict(pending_input), "input_supported": True}
+            action.pop("approval", None)
         self.pending_action(task["identity"].room_id, member_id, action)
 
     def _retry_stopping_tasks(self, binding: HostedRoomBinding, lease: state.DriverLease) -> bool:

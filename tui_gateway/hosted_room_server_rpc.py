@@ -176,7 +176,15 @@ class HostedRoomServerRPC:
             if callable(pending_reader) and (pending := pending_reader(str(record.get("session_key") or ""))):
                 result["status"] = "waiting_for_approval"
                 result["pending_approval"] = pending
-            return result
+        input_reader = getattr(self.server, "_pending_clarify_request_payload", None)
+        if callable(input_reader) and (pending := input_reader(session_id)):
+            result["status"] = "waiting_for_input"
+            result["pending_input"] = pending
+        return result
+
+    def respond_input(self, *, session_id, proof, request):
+        from tui_gateway.hosted_room_input import respond_exact
+        return respond_exact(self.server, session_id=session_id, proof=proof, request=request)
 
     def approve(self, *, session_id: str, request_id: str, choice: str) -> Mapping[str, Any]:
         """Resolve one exact local room approval without broad policy changes."""
