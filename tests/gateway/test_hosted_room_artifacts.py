@@ -1255,3 +1255,22 @@ def test_share_group_file_rejects_sibling_profile_state(
         "ok": False,
         "error": "Files owned by another Hermes profile cannot be shared.",
     }
+
+
+def test_outbox_rejects_blob_replaced_with_symlink(tmp_path):
+    scope = _scope()
+    outbox = RoomArtifactOutbox(tmp_path / "state.db")
+    content = b"exact\r\nartifact\x00\xff"
+    stored = outbox.put_bytes(scope=scope, data=content, source_name="handoff.bin")
+    with sqlite3.connect(outbox.db_path) as conn:
+        blob_name = conn.execute(
+            "SELECT blob_name FROM hosted_room_output_artifacts WHERE artifact_id=?",
+            (stored["artifact_id"],),
+        ).fetchone()[0]
+    blob = outbox.blob_root / blob_name
+    target = tmp_path / "outside.bin"
+    target.write_bytes(content)
+    blob.unlink()
+    blob.symlink_to(target)
+    with pytest.raises(RoomArtifactError):
+        outbox.read(scope, stored["artifact_id"])
