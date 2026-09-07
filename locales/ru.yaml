@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Получить последний ответ Бота как документ."
     date_format: "%d.%m.%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Скачать"
 
   group_home:
     cancel_late: "Сохранение уже началось; согласие может быть сохранено. Выбор чата отменён. Используйте {command_prefix}sethome, чтобы сбросить согласие."

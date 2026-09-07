@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Die neueste Bot-Antwort als Dokument abrufen."
     date_format: "%d.%m.%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Herunterladen"
 
   group_home:
     cancel_late: "Das Speichern hat bereits begonnen; die Zustimmung kann gespeichert werden. Die Auswahl ist abgebrochen. Mit {command_prefix}sethome setzt du die Zustimmung zurück."

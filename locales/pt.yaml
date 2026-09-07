@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Obter a última resposta do Bot como documento."
     date_format: "%d/%m/%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Transferir"
 
   group_home:
     cancel_late: "O salvamento já começou; o consentimento pode ser salvo. O seletor foi cancelado. Use {command_prefix}sethome para redefinir o consentimento."

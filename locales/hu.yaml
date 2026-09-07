@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - A Bot legutóbbi válaszának lekérése dokumentumként."
     date_format: "%Y.%m.%d %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Letöltés"
 
   group_home:
     cancel_late: "A mentés már elkezdődött; a hozzájárulás mentésre kerülhet. A választó megszakítva. A hozzájárulást a {command_prefix}sethome paranccsal állíthatod vissza."

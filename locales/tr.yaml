@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Bot'un son yanıtını belge olarak alın."
     date_format: "%d.%m.%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "İndir"
 
   group_home:
     cancel_late: "Kaydetme zaten başladı; onay kaydedilebilir. Seçici iptal edildi. Onayı sıfırlamak için {command_prefix}sethome kullanın."

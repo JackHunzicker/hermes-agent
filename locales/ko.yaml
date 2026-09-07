@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Bot의 최신 답변을 문서로 받습니다."
     date_format: "%Y-%m-%d %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "다운로드"
 
   group_home:
     cancel_late: "저장이 이미 시작되어 동의가 저장될 수 있습니다. 선택 화면은 취소했습니다. 동의를 초기화하려면 {command_prefix}sethome을 사용하세요."

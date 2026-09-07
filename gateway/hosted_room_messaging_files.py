@@ -60,6 +60,17 @@ def size_label(size):
     )
 
 
+def file_icon(item):
+    mime = str(item.get("mime") or "").lower()
+    icons = {
+        "application/pdf": "📕", "text/csv": "📊", "application/zip": "📦",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "📊",
+    }
+    return icons.get(mime) or {
+        "image": "🖼", "audio": "🎵", "video": "🎬", "text": "📄",
+    }.get(mime.split("/", 1)[0], "📎")
+
+
 def _clip_caption_part(value, limit):
     if len(value) <= limit:
         return value
@@ -485,7 +496,7 @@ class FilesMenu:
     def file_label(self, item):
         return self._file_labels([item])[0]
 
-    def _file_labels(self, items):
+    def _file_labels(self, items, *, multiline=False):
         """Fit once per loaded row, then disambiguate final renderer captions."""
         from hermes_time import get_timezone
 
@@ -505,17 +516,17 @@ class FilesMenu:
         loaded.update((identity(item), item) for item in items)
         records, minutes, seconds = {}, Counter(), Counter()
         for key, item in loaded.items():
-            name = _clip_caption_part(label(item["name"], len(item["name"])), 42)
+            name = _clip_caption_part(label(item["name"], len(item["name"])), 80 if multiline else 42)
             producer = label(item["producer"]["label"], 20)
             instant = datetime.fromtimestamp(item["shared_at"], timezone.utc).astimezone(zone)
             minute = instant.strftime(date_format)
             group = (name, producer, minute)
             minutes[group] += 1
             seconds[(*group, instant.second)] += 1
-            records[key] = (name, producer, instant, group, size_label(item["size"]))
+            records[key] = (name, producer, instant, group, size_label(item["size"]), file_icon(item))
 
         def fit(record, code=""):
-            name, producer, instant, group, size = record
+            name, producer, instant, group, size, icon = record
             precision = date_format
             if minutes[group] > 1:
                 precision += ":%S"
@@ -524,6 +535,10 @@ class FilesMenu:
             date = instant.strftime(precision)
             # A sanitized filename cannot start with this reserved code prefix.
             prefix = f"[{code}] " if code else ""
+            if multiline:
+                return f"{icon} **{prefix}{name}**\n" + text(
+                    "file_metadata", producer=producer, date=date, size=size,
+                )
             fixed = text("file_label", name="", producer="", date=date, size=size)
             available = limit - len(prefix) - len(fixed)
             if available < 2:
@@ -561,11 +576,13 @@ class FilesMenu:
 
         page = self.pages[self.position]
         lines = ["**" + text("title", name=label(self.room.get("name"))) + "**"]
-        for item, caption in zip(page["items"], self._file_labels(page["items"])):
+        for item, caption in zip(page["items"], self._file_labels(page["items"], multiline=True)):
             code = selection_digest(self.room, item)[: 64 if self.long_codes else 8]
             lines.extend([
+                "",
                 caption,
-                f"`{self.command} {self.reference} file {code}`",
+                text("command_hint", caption=text("download"),
+                     command=f"`{self.command} {self.reference} file {code}`"),
             ])
         if not page["items"]:
             lines.append(
@@ -575,6 +592,7 @@ class FilesMenu:
                 if self.query
                 else text("empty")
             )
+        lines.append("")
         if page["has_more"]:
             lines.append(
                 text("command_hint", caption=text("older"),
@@ -587,8 +605,8 @@ class FilesMenu:
             )
         lines.append(text("command_hint", caption=text("search"),
                           command=f"`{self.command} {self.reference} files <text>`"))
-        lines.append(text("command_hint", caption=text("full_reply"),
-                          command=f"`{self.command} {self.reference} reply`"))
+        lines.append(text("command_hint", caption=text("back"),
+                          command=f"`{self.command} {self.reference}`"))
         return "\n".join(lines)
 
     async def previous(self):

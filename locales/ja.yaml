@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Bot の最新の返信を文書として取得します。"
     date_format: "%Y/%m/%d %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "ダウンロード"
 
   group_home:
     cancel_late: "保存はすでに始まっているため、同意が保存される場合があります。選択画面はキャンセルしました。同意をリセットするには {command_prefix}sethome を使ってください。"

@@ -85,6 +85,8 @@ gateway:
     help_reply: "{command} - Faigh an freagra is déanaí ón mBota mar dhoiciméad."
     date_format: "%d/%m/%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Íoslódáil"
 
   group_home:
     cancel_late: "Tá an sábháil tosaithe cheana; d’fhéadfadh an toiliú a bheith sábháilte. Tá an roghnóir curtha ar ceal. Úsáid {command_prefix}sethome chun an toiliú a athshocrú."

@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Kry die Bot se jongste antwoord as 'n dokument."
     date_format: "%Y-%m-%d %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Laai af"
 
   group_home:
     cancel_late: "Stoor het reeds begin; toestemming kan gestoor word. Die keuselys is gekanselleer. Gebruik {command_prefix}sethome om toestemming terug te stel."

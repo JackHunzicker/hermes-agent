@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Récupérer la dernière réponse du Bot sous forme de document."
     date_format: "%d/%m/%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Télécharger"
 
   group_home:
     cancel_late: "L’enregistrement a déjà commencé ; le consentement peut être enregistré. Le sélecteur est annulé. Utilisez {command_prefix}sethome pour réinitialiser le consentement."

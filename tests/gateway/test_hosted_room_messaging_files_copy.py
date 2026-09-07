@@ -38,9 +38,10 @@ async def test_french_native_and_plain_copy_keep_command_values(consumer, monkey
     assert page.title.startswith("Fichiers")
     assert "Rechercher" in [choice["label"] for choice in page.choices]
     plain = menu.plain_files()
-    assert "Obtenir la réponse complète:" in plain
+    assert "Télécharger:" in plain
     assert "`/group 1 files <text>`" in plain
-    assert "`/group 1 reply`" in plain
+    assert files.text("back") + ": `/group 1`" in plain
+    assert "`/group 1 reply`" not in plain
 
 
 def test_error_copy_uses_real_french_catalog(monkeypatch):
@@ -60,7 +61,9 @@ async def test_same_minute_versions_have_distinct_native_and_plain_labels(consum
     captions = [choice["label"] for choice in page.choices[:2]]
     assert len(set(captions)) == 2
     assert "08:12:07" in captions[0] and "08:12:42" in captions[1]
-    assert all(caption in menu.plain_files() for caption in captions)
+    plain = menu.plain_files()
+    assert "08:12:07" in plain and "08:12:42" in plain
+    assert plain.count("Download: ") == 2
     for choice, item in zip(page.choices, items):
         assert menu.actions[choice["value"]][1][0]["attachment_id"] == item["attachment_id"]
 
@@ -126,7 +129,9 @@ async def test_same_second_and_batch_timestamp_labels_survive_native_limits(cons
     captions = [choice_label(choice) for choice in page.choices[:2]]
     assert len(set(captions)) == 2
     assert all(len(caption) <= 100 for caption in captions)
-    assert all(caption in menu.plain_files() for caption in captions)
+    rows = menu.plain_files().split("\n\n")[1:3]
+    assert rows[0] != rows[1]
+    assert all("Download: " in row for row in rows)
 
 
 @pytest.mark.asyncio
@@ -196,3 +201,107 @@ async def test_exact_timestamp_disambiguation_extends_existing_colliding_codes(c
     captions = [menu.file_label(item) for item in items]
     assert "deadbeef0000" in captions[0] and "deadbeef1111" in captions[1]
     assert all(len(caption) <= 100 for caption in captions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform_name,prefix", [("whatsapp", "/"), ("matrix", "!"), ("slack", "!")])
+async def test_text_file_blocks_use_correct_download_search_and_back_commands(
+    consumer, monkeypatch, platform_name, prefix
+):
+    from types import MethodType
+    from gateway.config import Platform
+    from gateway.run import GatewayRunner
+    from gateway.hosted_room_file_lookup import selection_digest
+
+    state, runner, adapter = consumer
+    platform = Platform(platform_name)
+    runner.config.platforms[platform] = adapter.config
+    adapter.typed_command_prefix = prefix
+    runner._typed_command_prefix_for = MethodType(GatewayRunner._typed_command_prefix_for, runner)
+    monkeypatch.setattr(type(adapter), "supports_choice_pages", False)
+    publish(state, "plan.md", b"version one")
+    publish(state, "plan.md", b"version two")
+    result = await runner._handle_rooms_command(event("/group 1 files", platform=platform))
+    menu = next(reversed(runner._group_file_menus.values()))
+    blocks = result.split("\n\n")
+    assert blocks[0].startswith("**Files")
+    for item, block in zip(menu.pages[0]["items"], blocks[1:3]):
+        name, metadata, command = block.splitlines()
+        assert name == "📄 **plan.md**"
+        assert files.label(item["producer"]["label"], 20) in metadata
+        assert files.size_label(item["size"]) in metadata
+        code = selection_digest(menu.room, item)[:8]
+        assert command == f"Download: `{prefix}group 1 file {code}`"
+    assert f"Search: `{prefix}group 1 files <text>`" in blocks[-1]
+    assert f"Back: `{prefix}group 1`" in blocks[-1]
+    assert "reply`" not in result
+    assert not adapter.documents and not adapter.pages
+    if prefix == "!":
+        assert "/group" not in result
+    else:
+        from gateway.platforms.whatsapp_common import WhatsAppBehaviorMixin
+
+        whatsapp = WhatsAppBehaviorMixin().format_message(result)
+        assert "\n\n📄 *plan.md*\n" in whatsapp
+        assert whatsapp.count("Download: ") == 2
+
+
+@pytest.mark.parametrize("mime,icon", [
+    ("application/pdf", "📕"), ("image/png", "🖼"), ("text/csv", "📊"),
+    ("audio/mpeg", "🎵"), ("video/mp4", "🎬"), ("application/zip", "📦"),
+    ("application/octet-stream", "📎"), ("text/plain", "📄"),
+])
+def test_file_type_icon_uses_catalog_mime(mime, icon):
+    assert files.file_icon({"mime": mime}) == icon
+
+
+@pytest.mark.asyncio
+async def test_full_text_page_is_bounded_escaped_and_keeps_exact_download_codes(consumer):
+    from gateway.hosted_room_file_lookup import selection_digest
+
+    state, runner, _ = consumer
+    for _ in range(8):
+        publish(state, "same.md")
+    menu = files.FilesMenu(runner, event("/group 1 files"), state.backend, "/group")
+    await menu.bind("1")
+    await menu.files_page()
+    menu.long_codes = True
+    for item in menu.pages[0]["items"]:
+        item["name"] = "/unsafe\u202e @all **name** " + "long" * 60
+        item["producer"]["label"] = "[author](url)\n@all " * 20
+        item["shared_at"] = 1_788_509_527
+    result = menu.plain_files()
+    assert len(result.encode("utf-16-le")) // 2 < 4096
+    assert result.count("Download: ") == 8
+    assert "\u202e" not in result and "@all" not in result
+    for item in menu.pages[0]["items"]:
+        assert f"file {selection_digest(menu.room, item)}`" in result
+
+
+@pytest.mark.asyncio
+async def test_telegram_picker_and_room_full_reply_action_are_unchanged(consumer):
+    from gateway import hosted_rooms
+    from gateway.config import Platform
+
+    state, runner, adapter = consumer
+    runner.config.platforms[Platform.TELEGRAM] = adapter.config
+    publish(state, "plan.md", b"original bytes")
+    hosted_rooms.append_event(
+        state.db, room_id="room-1", event_id="presentation-reply",
+        kind="message.member", actor={"kind": "member", "id": "ops"},
+        payload={"text": "A complete stored reply."},
+        authority_gateway_id=state.authority, authority_epoch=1,
+    )
+    menu = files.FilesMenu(runner, event("/group 1 files", platform=Platform.TELEGRAM), state.backend, "/group")
+    await menu.bind("1")
+    page = await menu.files_page()
+    label = page.choices[0]["label"]
+    action = menu.actions[page.choices[0]["value"]]
+    assert label.startswith("plan.md · ") and len(label) <= 64
+    assert "Download:" not in label and "\n" not in label
+    menu.plain_files()
+    assert menu.file_label(menu.pages[0]["items"][0]) == label
+    assert menu.actions[page.choices[0]["value"]] == action
+    assert "reply" not in {value[0] for value in menu.actions.values()}
+    room = await menu.room_page()
+    assert any(menu.actions[choice["value"]][0] == "reply" for choice in room.choices)

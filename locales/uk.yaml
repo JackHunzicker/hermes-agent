@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Отримати останню відповідь Бота як документ."
     date_format: "%d.%m.%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Завантажити"
 
   group_home:
     cancel_late: "Збереження вже почалося; згоду може бути збережено. Вибір чату скасовано. Скористайтеся {command_prefix}sethome, щоб скинути згоду."

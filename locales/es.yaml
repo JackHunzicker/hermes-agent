@@ -81,6 +81,8 @@ gateway:
     help_reply: "{command} - Obtener la última respuesta del Bot como documento."
     date_format: "%d/%m/%Y %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Descargar"
 
   group_home:
     cancel_late: "El guardado ya ha comenzado; el consentimiento puede quedar guardado. Se cancela el selector. Usa {command_prefix}sethome para restablecer el consentimiento."

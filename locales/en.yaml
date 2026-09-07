@@ -91,6 +91,8 @@ gateway:
     help_reply: "{command} - Get the latest Bot reply as a document."
     date_format: "%Y-%m-%d %H:%M"
     file_label: "{name} · {producer} · {date} · {size}"
+    file_metadata: "{producer} · {date} · {size}"
+    download: "Download"
 
   group_home:
     cancel_late: "Saving has already started, so consent may be saved. The chooser is cancelled. Use {command_prefix}sethome to reset consent."
