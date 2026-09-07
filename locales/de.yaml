@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Seite neu laden"
+    all_title: "Dateien aus Gruppenchats"
+    all_empty: "In den Gruppenchats, die geprüft werden konnten, wurden keine geteilten Dateien gefunden."
+    group_from: "Gruppenchat: {name}"
+    page_title: "{name} · Seite {current}"
+    page_action: "Zu Seite {current}"
+    some_unavailable: "Einige Gruppenchats konnten nicht geprüft werden. Ihre Dateien fehlen möglicherweise in dieser Liste."
+    classic_all: "Öffne für Desktop-gesteuerte Gruppenchats Dateien in Hermes Desktop."
+    all_search: "Alle Gruppenchats durchsuchen: {command}"
     view_group: "Gruppenchat ansehen"
     unsupported: "Dateien können hier nicht gesendet werden. Hole die Datei unter Dateien in Desktop."
     unavailable: "Die Dateiansicht ist für diesen Gruppenchat noch nicht verfügbar."

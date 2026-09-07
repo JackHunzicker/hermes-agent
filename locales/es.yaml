@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Actualizar página"
+    all_title: "Archivos de los chats de grupo"
+    all_empty: "No se encontraron archivos compartidos en los chats de grupo que se pudieron consultar."
+    group_from: "Chat de grupo: {name}"
+    page_title: "{name} · página {current}"
+    page_action: "Ir a la página {current}"
+    some_unavailable: "No se pudieron consultar algunos chats de grupo. Es posible que sus archivos no aparezcan en esta lista."
+    classic_all: "Para los chats de grupo gestionados desde Desktop, abre Archivos en Hermes Desktop."
+    all_search: "Buscar en todos los chats de grupo: {command}"
     view_group: "Ver el chat de grupo"
     unsupported: "El envío de archivos no está disponible aquí. Obtén el archivo desde Archivos en Desktop."
     unavailable: "La consulta de archivos aún no está disponible para este chat de grupo."

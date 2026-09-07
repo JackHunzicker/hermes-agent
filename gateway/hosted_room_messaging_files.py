@@ -496,12 +496,14 @@ class FilesMenu:
     def file_label(self, item):
         return self._file_labels([item])[0]
 
-    def _file_labels(self, items, *, multiline=False):
+    def _file_labels(self, items, *, multiline=False, max_caption_chars=None):
         """Fit once per loaded row, then disambiguate final renderer captions."""
         from hermes_time import get_timezone
 
         # Files rows are not current-choice markers: Telegram gives them 64 chars.
         limit = 64 if self.event.source.platform.value == "telegram" else 100
+        if max_caption_chars is not None:
+            limit = min(limit, max_caption_chars)
         zone = get_timezone()
         date_format = text("date_format")
 
@@ -1108,6 +1110,26 @@ async def _ack(menu):
         )
     except Exception:
         pass
+
+
+def format_room_detail_with_files(service, room, *, room_command="/group", **kwargs):
+    """Add a discoverable text route without probing or exporting any file."""
+    from gateway.hosted_room_messaging import format_room_detail, room_reference
+
+    result = format_room_detail(service, room, room_command=room_command, **kwargs)
+    if room.get("_room_mode") != "desktop" and callable(getattr(service, "list_files", None)):
+        result += "\n" + text("command_hint", caption=text("files"),
+                              command=f"`{room_command} {room_reference(room)} files`")
+    return result
+
+
+def format_room_list_with_files(service, *, rooms=None, rooms_command="/group", **kwargs):
+    from gateway.hosted_room_messaging import format_room_list
+
+    result = format_room_list(service, rooms=rooms, rooms_command=rooms_command, **kwargs)
+    if rooms and callable(getattr(service, "list_files", None)):
+        result += "\n" + text("command_hint", caption=text("files"), command=f"`{rooms_command} files`")
+    return result
 
 
 def room_picker_callback(runner, event, backend, command, fallback):

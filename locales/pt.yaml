@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Atualizar página"
+    all_title: "Ficheiros das conversas de grupo"
+    all_empty: "Não foram encontrados ficheiros partilhados nas conversas de grupo que foi possível consultar."
+    group_from: "Conversa de grupo: {name}"
+    page_title: "{name} · página {current}"
+    page_action: "Ir para a página {current}"
+    some_unavailable: "Não foi possível consultar algumas conversas de grupo. Os seus ficheiros poderão não aparecer nesta lista."
+    classic_all: "Para conversas de grupo geridas pelo Desktop, abra Ficheiros no Hermes Desktop."
+    all_search: "Pesquisar em todas as conversas de grupo: {command}"
     view_group: "Ver a conversa de grupo"
     unsupported: "O envio de ficheiros não está disponível aqui. Obtenha o ficheiro em Ficheiros no Desktop."
     unavailable: "A consulta de ficheiros ainda não está disponível para esta conversa de grupo."

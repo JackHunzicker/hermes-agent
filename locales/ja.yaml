@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "ページを再読み込み"
+    all_title: "グループチャット全体のファイル"
+    all_empty: "確認できたグループチャットには、共有ファイルが見つかりませんでした。"
+    group_from: "グループチャット: {name}"
+    page_title: "{name} · {current} ページ"
+    page_action: "{current} ページに移動"
+    some_unavailable: "一部のグループチャットを確認できませんでした。そのチャットのファイルは、この一覧に含まれていない可能性があります。"
+    classic_all: "Desktop が管理するグループチャットの場合は、Hermes Desktop で「ファイル」を開いてください。"
+    all_search: "すべてのグループチャットを検索: {command}"
     view_group: "グループチャットを見る"
     unsupported: "ここではファイルを送信できません。Desktop の「ファイル」から取得してください。"
     unavailable: "このグループチャットではまだファイルを閲覧できません。"

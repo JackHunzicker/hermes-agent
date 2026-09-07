@@ -315,6 +315,8 @@ class GroupChatSlashCommandsMixin:
             text("help_pages", command=f"`{command} list <page>`"),
             f"`{command} 7` - Check recent activity.",
             f"`{command} 7 bots` - See who's in the group.",
+            t("gateway.group_files.command_hint", caption=t("gateway.group_files.all_title"),
+              command=f"`{command} files [query]`"),
             t("gateway.group_files.help_find", command=f"`{command} 7 files [query]`"),
             t("gateway.group_files.help_get", command=f"`{command} 7 file <file-id>`"),
             t("gateway.group_files.help_reply", command=f"`{command} 7 reply`"),
@@ -426,7 +428,20 @@ class GroupChatSlashCommandsMixin:
         rooms_command = f"{self._typed_command_prefix_for(event.source)}group"
         query = self._group_chat_command_args(event).strip()
         try:
+            from gateway.hosted_room_messaging_files import (
+                format_room_detail_with_files as format_room_detail,
+                format_room_list_with_files as format_room_list,
+            )
+        except ImportError:
+            pass
+        try:
             words = query.split()
+            if words and words[0].casefold() == "files":
+                try:
+                    from gateway.hosted_room_messaging_all_files import handle_all_files
+                except ImportError:
+                    return "File browsing isn't available for this Group Chat yet."
+                return await handle_all_files(self, event, service, query[len(words[0]):].strip())
             if len(words) >= 2 and words[0].isdecimal() and words[1].casefold() in {"files", "file", "reply"}:
                 try:
                     from gateway.hosted_room_messaging_files import handle_command

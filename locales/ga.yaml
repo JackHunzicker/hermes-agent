@@ -25,6 +25,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Athlódáil an leathanach"
+    all_title: "Comhaid ó chomhráite grúpa"
+    all_empty: "Níor aimsíodh aon chomhaid chomhroinnte sna comhráite grúpa a d'fhéadfaí a sheiceáil."
+    group_from: "Comhrá grúpa: {name}"
+    page_title: "{name} · leathanach {current}"
+    page_action: "Téigh go leathanach {current}"
+    some_unavailable: "Níorbh fhéidir roinnt comhráite grúpa a sheiceáil. Seans go bhfuil a gcomhaid ar iarraidh ón liosta seo."
+    classic_all: "I gcás comhráite grúpa atá á mbainistiú ag Desktop, oscail Comhaid in Hermes Desktop."
+    all_search: "Cuardaigh i ngach comhrá grúpa: {command}"
     view_group: "Féach ar an gcomhrá grúpa"
     unsupported: "Níl seoladh comhad ar fáil anseo. Faigh an comhad ó Chomhaid ar Desktop."
     unavailable: "Níl brabhsáil comhad ar fáil don chomhrá grúpa seo fós."

@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Actualiser la page"
+    all_title: "Fichiers des discussions de groupe"
+    all_empty: "Aucun fichier partagé trouvé dans les discussions de groupe qui ont pu être consultées."
+    group_from: "Discussion de groupe : {name}"
+    page_title: "{name} · page {current}"
+    page_action: "Aller à la page {current}"
+    some_unavailable: "Certaines discussions de groupe n'ont pas pu être consultées. Leurs fichiers peuvent manquer dans cette liste."
+    classic_all: "Pour les discussions de groupe gérées par Desktop, ouvrez Fichiers dans Hermes Desktop."
+    all_search: "Rechercher dans toutes les discussions de groupe : {command}"
     view_group: "Voir le groupe"
     unsupported: "L'envoi de fichiers n'est pas disponible ici. Récupérez le fichier dans Fichiers sur Desktop."
     unavailable: "La consultation des fichiers n'est pas encore disponible pour cette discussion de groupe."

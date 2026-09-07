@@ -31,6 +31,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Reload page"
+    all_title: "Files across Group Chats"
+    all_empty: "No shared files found in the Group Chats that could be checked."
+    group_from: "Group Chat: {name}"
+    page_title: "{name} · page {current}"
+    page_action: "Go to page {current}"
+    some_unavailable: "Some Group Chats could not be checked. Their files may be missing from this list."
+    classic_all: "For Desktop-driven Group Chats, open Files in Hermes Desktop."
+    all_search: "Search all Group Chats: {command}"
     view_group: "View Group Chat"
     unsupported: "Hermes can’t send files in this chat yet. Open Files in Hermes Desktop."
     unavailable: "File browsing isn't available for this Group Chat yet."

@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "刷新页面"
+    all_title: "跨群聊文件"
+    all_empty: "在能够检查的群聊中未找到共享文件。"
+    group_from: "群聊：{name}"
+    page_title: "{name} · 第 {current} 页"
+    page_action: "转到第 {current} 页"
+    some_unavailable: "部分群聊无法检查，其文件可能未包含在此列表中。"
+    classic_all: "对于由 Desktop 管理的群聊，请在 Hermes Desktop 中打开“文件”。"
+    all_search: "搜索所有群聊：{command}"
     view_group: "查看群聊"
     unsupported: "此处无法发送文件。请在 Desktop 的“文件”中获取。"
     unavailable: "此群聊暂不支持浏览文件。"

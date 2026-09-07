@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Oldal újratöltése"
+    all_title: "Fájlok a csoportos csevegésekből"
+    all_empty: "Nem találhatók megosztott fájlok az ellenőrizhető csoportos csevegésekben."
+    group_from: "Csoportos csevegés: {name}"
+    page_title: "{name} · {current}. oldal"
+    page_action: "Ugrás erre az oldalra: {current}"
+    some_unavailable: "Néhány csoportos csevegést nem sikerült ellenőrizni. A fájljaik hiányozhatnak ebből a listából."
+    classic_all: "A Desktop által vezérelt csoportos csevegésekhez nyisd meg a Fájlok nézetet a Hermes Desktopban."
+    all_search: "Keresés az összes csoportos csevegésben: {command}"
     view_group: "Csoportos csevegés megtekintése"
     unsupported: "Itt nem érhető el fájlküldés. A fájlt a Desktop Fájlok nézetében érheted el."
     unavailable: "Ebben a csoportos csevegésben még nem lehet fájlokat böngészni."

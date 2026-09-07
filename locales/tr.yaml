@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "Sayfayı yenile"
+    all_title: "Grup sohbetlerindeki dosyalar"
+    all_empty: "Kontrol edilebilen grup sohbetlerinde paylaşılan dosya bulunamadı."
+    group_from: "Grup sohbeti: {name}"
+    page_title: "{name} · sayfa {current}"
+    page_action: "{current}. sayfaya git"
+    some_unavailable: "Bazı grup sohbetleri kontrol edilemedi. Bu sohbetlerin dosyaları listede eksik olabilir."
+    classic_all: "Desktop tarafından yönetilen grup sohbetleri için Hermes Desktop'ta Dosyalar'ı açın."
+    all_search: "Tüm grup sohbetlerinde ara: {command}"
     view_group: "Grup sohbetini görüntüle"
     unsupported: "Burada dosya gönderimi kullanılamıyor. Dosyayı Desktop'taki Dosyalar'dan alın."
     unavailable: "Bu grup sohbetinde dosya tarama henüz kullanılamıyor."

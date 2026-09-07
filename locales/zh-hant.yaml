@@ -21,6 +21,15 @@ approval:
 
 gateway:
   group_files:
+    reload_page: "重新整理頁面"
+    all_title: "跨群組聊天檔案"
+    all_empty: "在能夠檢查的群組聊天中未找到共享檔案。"
+    group_from: "群組聊天：{name}"
+    page_title: "{name} · 第 {current} 頁"
+    page_action: "前往第 {current} 頁"
+    some_unavailable: "部分群組聊天無法檢查，其檔案可能未包含在此清單中。"
+    classic_all: "對於由 Desktop 管理的群組聊天，請在 Hermes Desktop 中開啟「檔案」。"
+    all_search: "搜尋所有群組聊天：{command}"
     view_group: "查看群組聊天"
     unsupported: "此處無法傳送檔案。請在 Desktop 的「檔案」中取得。"
     unavailable: "此群組聊天尚不支援瀏覽檔案。"
