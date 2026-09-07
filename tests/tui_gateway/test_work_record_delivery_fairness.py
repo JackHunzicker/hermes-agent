@@ -3,6 +3,7 @@
 import io
 import json
 import sqlite3
+import urllib.error
 
 import pytest
 
@@ -11,7 +12,7 @@ from gateway import hosted_room_peer as peer
 from gateway import hosted_room_work_records as records
 from gateway import hosted_rooms as rooms
 from tests.tui_gateway.test_hosted_room_replication import (
-    HOME, KEY, SECRET, TARGET, append, pair, save_link,  # noqa: F401
+    HOME, KEY, SECRET, TARGET, add_profile, append, pair, save_link,  # noqa: F401
 )
 from tui_gateway import hosted_room_replication as publisher
 
@@ -156,3 +157,55 @@ def test_unavailable_record_transport_does_not_stop_history(copying):
     assert all(record == copying.records[0] for record in copying.records)
     assert copying.http.requests[-1][1]["page"]["cursor"] == rooms.room_state(
         copying.source, room_id="room")["latest_seq"]
+
+
+@pytest.mark.parametrize("busy", [False, True], ids=["quiet-control", "continuous-history"])
+def test_recovered_alternate_gets_a_work_attempt(pair, monkeypatch, busy):
+    add_profile(pair)
+    for member, profile in (("reviewer", "reviewer"), ("z-other", "default")):
+        link = save_link(pair.source, member_id=member, profile=profile,
+                         permissions=("replicate", records.PERMISSION))
+        claims = peer.decode_room_grant(SECRET, link.grant, permission=records.PERMISSION)
+        rooms.reserve_peer_room(pair.target, claims=claims, expires_at=claims["status_expires_at"])
+
+    recovered = False
+    attempts, bodies = [], []
+
+    def transport(request, *, timeout):
+        if not request.full_url.endswith("/work-records"):
+            return pair.http(request, timeout=timeout)
+        token = request.get_header("Authorization").removeprefix("HermesRoom ")
+        claims = peer.decode_room_grant(SECRET, token, permission=records.PERMISSION)
+        member = claims["member_id"]
+        record = json.loads(request.data)["record"]
+        attempts.append(member)
+        bodies.append(record)
+        if member == "reviewer" or not recovered:
+            raise urllib.error.HTTPError(request.full_url, 503, "unavailable", {},
+                io.BytesIO(b'{"error":{"code":"unavailable"}}'))
+        reply = records.ingest(pair.target, record=record, token=token, secret=SECRET,
+                               target_install_id=TARGET, target_profile=claims["target_profile"])
+        return io.BytesIO(json.dumps(reply).encode())
+
+    monkeypatch.setattr("hermes_cli.urllib_security.open_credentialed_url", transport)
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    pub._publish_one(KEY)
+    pub._publish_one(KEY)
+    pub._publish_one(("room", "z-other"))
+    assert attempts == ["reviewer", "z-other"]
+    assert {row["work_record_status"] for row in pub.status()["routes"]} == {"unavailable"}
+    frozen = bodies[0]
+    recovered = True
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    start = len(attempts)
+    for turn in range(6):
+        if busy:
+            append(pair.source, f"continuing-{turn}")
+        pub._publish_one(("room", "z-other" if turn % 2 == 0 else "reviewer"))
+        if pub.status()["work_records"][0]["status"] == "acked":
+            break
+    assert all(body == frozen for body in bodies)
+    if busy:
+        assert pair.http.requests[-1][1]["page"]["cursor"] == rooms.room_state(
+            pair.source, room_id="room")["latest_seq"]
+    assert pub.status()["work_records"][0]["status"] == "acked", attempts[start:]

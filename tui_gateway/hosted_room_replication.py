@@ -398,7 +398,7 @@ class HostedRoomReplicationPublisher:
                 # Equal transient work failures must get their existing queue
                 # turns; a stable member key otherwise pins retries to one peer.
                 turn_rank = route.key != initial.key if work_rank == 0 and work_unavailable else False
-                rank = (unavailable, work_rank, work_unavailable, False) if history_needed else (work_rank, work_unavailable, turn_rank, unavailable)
+                rank = (unavailable, work_rank, work_unavailable, turn_rank) if history_needed else (work_rank, work_unavailable, turn_rank, unavailable)
                 selected.append((*rank, route.key, route))
         return min(selected, key=lambda item: item[:5])[5] if selected else None
 
