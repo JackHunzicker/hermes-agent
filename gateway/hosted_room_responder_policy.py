@@ -20,8 +20,10 @@ def _field(member, name):
 def validate_mentions(text, members):
     """Resolve explicit handles/immutable IDs, refusing unknown or retired targets."""
     members = tuple(members)
-    aliases = {str(_field(m, key)).casefold(): _field(m, "member_id")
-               for m in members for key in ("handle", "member_id")}
+    aliases = {str(_field(m, "member_id")).casefold(): _field(m, "member_id") for m in members}
+    # Preserve existing @handle meaning in stored rooms, regardless of roster order.
+    # Immutable IDs are aliases only where no handle already owns that spelling.
+    aliases.update({str(_field(m, "handle")).casefold(): _field(m, "member_id") for m in members})
     requested = set()
     for match in _MENTION.finditer(str(text)):
         token = match.group(1).rstrip(".:").casefold()
