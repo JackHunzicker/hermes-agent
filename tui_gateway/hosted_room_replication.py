@@ -380,10 +380,6 @@ class HostedRoomReplicationPublisher:
                               through_seq=target["acked_seq"]))
         selected = []
         room = rooms.room_state(self.db_path, room_id=initial.key[0], include_disbanded=True)
-        # Newer conversation traffic must not let stale history-health scores
-        # outrank an eligible work route after its frozen anchor is acknowledged.
-        history_needed = not work_ready and (target is None or target["pending_end"] is not None
-                          or target["acked_seq"] < room["latest_seq"] or target["status"] != "acked")
         for raw in candidates:
             if not _replication_hint(raw["grant"]):
                 continue
@@ -404,9 +400,20 @@ class HostedRoomReplicationPublisher:
                 # Equal transient work failures must get their existing queue
                 # turns; a stable member key otherwise pins retries to one peer.
                 turn_rank = route.key != initial.key if work_rank == 0 and work_unavailable else False
-                rank = (unavailable, work_rank, work_unavailable, turn_rank) if history_needed else (work_rank, work_unavailable, turn_rank, unavailable)
-                selected.append((*rank, route.key, route))
-        return min(selected, key=lambda item: item[:5])[5] if selected else None
+                selected.append((unavailable, work_rank, work_unavailable, turn_rank, route.key, route))
+        # Prioritize a covered work anchor only when some current route can
+        # attempt it. Blocked work must not hide an otherwise healthy history path.
+        can_deliver_work = work_ready and any(item[1] == 0 for item in selected)
+        history_needed = not can_deliver_work and (target is None or target["pending_end"] is not None
+                          or target["acked_seq"] < room["latest_seq"] or target["status"] != "acked")
+
+        def rank(item):
+            unavailable, work_rank, work_unavailable, turn_rank, key, _ = item
+            if history_needed:
+                return unavailable, work_rank, work_unavailable, turn_rank, key
+            return work_rank, work_unavailable, turn_rank, unavailable, key
+
+        return min(selected, key=rank)[5] if selected else None
 
     def _target_checkpoint(self, route: _Route) -> dict | None:
         lineage = _digest([route.room["authority_gateway_id"], route.room["authority_epoch"], route.room["members"]])

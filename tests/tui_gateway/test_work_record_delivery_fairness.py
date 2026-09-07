@@ -305,3 +305,56 @@ def test_unacknowledged_anchor_still_prefers_healthy_history_route(pair, monkeyp
     assert route.key == KEY
     pub._publish_one(("room", "z-other"))
     assert pair.http.requests[-1][1]["page"]["cursor"] == 2
+
+
+@pytest.mark.parametrize("bad_ack", [False, True], ids=["valid-work-ack", "blocked-work-ack"])
+def test_no_deliverable_work_keeps_healthy_history_priority(pair, monkeypatch, bad_ack):
+    add_profile(pair)  # Deliberately history-only alternate.
+    link = save_link(pair.source, permissions=("replicate", records.PERMISSION))
+    claims = peer.decode_room_grant(SECRET, link.grant, permission=records.PERMISSION)
+    rooms.reserve_peer_room(pair.target, claims=claims, expires_at=claims["status_expires_at"])
+    fail_first_primary_history = True
+    history_attempts, work_attempts = [], []
+
+    def transport(request, *, timeout):
+        nonlocal fail_first_primary_history
+        token = request.get_header("Authorization").removeprefix("HermesRoom ")
+        is_work = request.full_url.endswith("/work-records")
+        claims = peer.decode_room_grant(SECRET, token, permission=records.PERMISSION if is_work else "replicate")
+        member = claims["member_id"]
+        if not is_work:
+            history_attempts.append(member)
+            fail = member == "z-other" or fail_first_primary_history
+            if member == "reviewer":
+                fail_first_primary_history = False
+            if fail:
+                raise urllib.error.HTTPError(request.full_url, 503, "unavailable", {},
+                    io.BytesIO(b'{"error":{"code":"unavailable"}}'))
+            return pair.http(request, timeout=timeout)
+        work_attempts.append(member)
+        record = json.loads(request.data)["record"]
+        reply = records.ingest(pair.target, record=record, token=token, secret=SECRET,
+                               target_install_id=TARGET, target_profile=claims["target_profile"])
+        if bad_ack:
+            reply["revision"] += 1
+        return io.BytesIO(json.dumps(reply).encode())
+
+    monkeypatch.setattr("hermes_cli.urllib_security.open_credentialed_url", transport)
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    pub._publish_one(KEY)  # Primary history fails once.
+    pub._publish_one(("room", "z-other"))  # Alternate history failure is now durable.
+    pub._publish_one(KEY)  # Primary catches up; alternate remains unavailable.
+    assert history_attempts == ["reviewer", "z-other", "reviewer"]
+    pub._publish_one(KEY)  # Valid or invalid work ACK, independently of healthy history.
+    expected = "invalid_ack" if bad_ack else "acked"
+    assert pub.status()["work_records"][0]["status"] == expected
+    assert work_attempts == ["reviewer"]
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    start = len(history_attempts)
+    for turn in range(4):
+        append(pair.source, f"later-{turn}")
+        pub._publish_one(("room", "z-other" if turn % 2 == 0 else "reviewer"))
+    if bad_ack:
+        assert work_attempts == ["reviewer"]  # Never retry the permanently refused generation.
+    latest = rooms.room_state(pair.source, room_id="room")["latest_seq"]
+    assert pair.http.requests[-1][1]["page"]["cursor"] == latest, history_attempts[start:]
