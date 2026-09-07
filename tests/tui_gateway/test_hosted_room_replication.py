@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gateway import hosted_room_link_records
 from gateway import hosted_room_links as links
 from gateway import hosted_room_peer as peer
 from gateway import hosted_room_replicas as replicas
@@ -125,6 +126,14 @@ def state(pub):
     return pub.status("room")["routes"][0]
 
 
+def retire_routes(db):
+    # Model the source-side completion of successful target revocation.
+    scope = dict(room_id="room", authority_gateway_id=HOME, authority_epoch=1)
+    hosted_room_link_records.begin_room_link_retirement(db, **scope)
+    hosted_room_link_records.complete_room_link_retirement(db, **scope)
+    hosted_room_link_records.delete_room_link_records(db, room_id="room")
+
+
 def add_profile(pair, *, target=TARGET):
     members = rooms.room_state(pair.source, room_id="room")["members"]
     catalog = peer.catalog_mapping(installation_id=target, target_profile="default", persistent_process=True)
@@ -233,7 +242,12 @@ def test_auth_rejection_stops_until_new_durable_grant(pair, error):
     {"home_install_id": "install:other"}, {"target": "install:other"},
 ])
 def test_ineligible_grants_never_send(pair, overrides):
-    rooms.delete_room_link_records(pair.source, room_id="room")
+    room = rooms.room_state(pair.source, room_id="room")
+    pair.source = pair.source.with_name("ineligible.db")
+    rooms.create_room(
+        pair.source, room_id="room", name=room["name"], members=room["members"], authority_gateway_id=HOME,
+    )
+    append(pair.source, "hello")
     link = save_link(pair.source, **overrides)
     pub = publisher.HostedRoomReplicationPublisher(pair.source)
     assert not pub._publish_one((link.room_id, link.member_id))
@@ -266,7 +280,7 @@ def test_network_race_cannot_advance_changed_route(pair, replacement):
             with sqlite3.connect(pair.source) as conn:
                 conn.execute("UPDATE hosted_rooms SET authority_gateway_id='install:other' WHERE room_id='room'")
         else:
-            rooms.delete_room_link_records(pair.source, room_id="room")
+            retire_routes(pair.source)
 
     pair.http.before = change_route
     pub._publish_one(KEY)
@@ -283,7 +297,7 @@ def test_network_race_cannot_advance_changed_route(pair, replacement):
 def test_disband_without_live_route_reports_stopped_not_delivered(pair):
     pub = publisher.HostedRoomReplicationPublisher(pair.source)
     pub._publish_one(KEY)
-    rooms.delete_room_link_records(pair.source, room_id="room")
+    retire_routes(pair.source)
     rooms.disband_room(pair.source, room_id="room", expected_gateway_id=HOME, expected_epoch=1)
     pub._scan(time.monotonic())
     assert state(pub)["status"] == "stopped_route_removed"
@@ -405,7 +419,7 @@ def test_source_quarantine_prevents_publishing(pair):
 
 
 def test_in_memory_only_service_route_is_not_published(pair):
-    rooms.delete_room_link_records(pair.source, room_id="room")
+    retire_routes(pair.source)
     pub = publisher.HostedRoomReplicationPublisher(pair.source)
     pub._scan(time.monotonic())
     assert list(pub._routes) == []
@@ -543,7 +557,7 @@ def test_old_grants_filtered_at_scan_without_room_reads_and_removal_still_detect
     assert list(pub._routes) == []
     assert pub._load_route(KEY) is None
     assert reads == []
-    rooms.delete_room_link_records(pair.source, room_id="room")
+    retire_routes(pair.source)
     pub._scan(time.monotonic())
     assert state(pub)["status"] == "stopped_route_removed"
 
