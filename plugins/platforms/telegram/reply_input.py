@@ -2,11 +2,32 @@
 
 import asyncio
 import re
+import unicodedata
 
+from agent.i18n import SUPPORTED_LANGUAGES, t
 from gateway.native_reply_input import NativeReplySubmission, ReplyInput, prompt_token, text
 from gateway.platforms.base import MessageType, SendResult
 
-_REFERENCE = re.compile(r"\[reply:([0-9a-f]{16})\]$")
+
+def _is_friendly_prompt(body):
+    """Recognize an orphan's complete localized shape for rejection, never authorization."""
+    if not isinstance(body, str):
+        return False
+    for language in SUPPORTED_LANGUAGES:
+        title = t("gateway.group_compose.title", lang=language)
+        prompt = t("gateway.group_compose.prompt", lang=language)
+        # The bounded, single-line slot is a label, not a parsed room reference.
+        pattern = re.escape(title).replace(re.escape("{group}"), r"(?P<label>[^\r\n]{1,80})")
+        match = re.fullmatch(pattern + re.escape("\n\n" + prompt), body)
+        if match is None:
+            continue
+        label = match["label"]
+        if (
+            label == " ".join(label.split())
+            and not any(unicodedata.category(char) in {"Cc", "Cf"} for char in label)
+        ):
+            return True
+    return False
 
 
 async def send_reply_input(adapter, event, title, on_reply):
@@ -25,7 +46,7 @@ async def send_reply_input(adapter, event, title, on_reply):
         # Explicit reply is functional input targeting, independent of cosmetic reply_to_mode.
         msg = await adapter._bot.send_message(
             chat_id=normalize_telegram_chat_id(source.chat_id),
-            text=f"{title}\n\n{text('prompt')}\n\n[reply:{request.token}]",
+            text=f"{title}\n\n{text('prompt')}",
             parse_mode=None,
             reply_parameters=ReplyParameters(message_id=int(event.message_id), allow_sending_without_reply=False),
             reply_markup=ForceReply(selective=True, input_field_placeholder=text("placeholder")[:64]),
@@ -37,8 +58,8 @@ async def send_reply_input(adapter, event, title, on_reply):
         await asyncio.to_thread(request.bind_prompt, msg.message_id)
         return request, SendResult(success=True, message_id=request.prompt_id)
     except Exception:
-        # A timeout may have delivered the prompt. Its reference remains recognizable, but
-        # without the returned message ID no reply can be submitted or enter ordinary chat.
+        # A timeout may have delivered the friendly prompt. Its shape can only close a
+        # later own-bot reply; without the returned message ID it cannot authorize input.
         await asyncio.to_thread(request.cancel)
         return None, SendResult(success=False, error=text("unavailable"))
 
@@ -47,28 +68,30 @@ async def dispatch_reply_input(adapter, message, update_id):
     reply = getattr(message, "reply_to_message", None)
     if reply is None:
         return False
-    marker = _REFERENCE.search(str(getattr(reply, "text", None) or ""))
     author = getattr(reply, "from_user", None)
     own_bot_reply = (
         getattr(author, "id", None) == getattr(adapter._bot, "id", None)
         and getattr(author, "is_bot", None) is True
     )
-    token = marker[1] if marker else None
-    if own_bot_reply:
-        try:
-            token = await asyncio.to_thread(
-                prompt_token, adapter, adapter._bot.id, message.chat.id, reply.message_id,
-            ) or token
-        except Exception:
-            # If prompt receipts cannot be read, do not risk turning a Group Send into a Bot turn.
-            token = token or "unavailable"
-    if token is None:
+    if not own_bot_reply:
+        return False
+    try:
+        token = await asyncio.to_thread(
+            prompt_token, adapter, adapter._bot.id, message.chat.id, reply.message_id,
+        )
+    except Exception:
+        # Receipt failure cannot authorize input or claim every ordinary bot reply.
+        # Retained exact IDs and the friendly orphan shape can still reject known input.
+        known = any(
+            request.bot_id == str(adapter._bot.id)
+            and request.chat_id == str(message.chat.id)
+            and request.prompt_id == str(reply.message_id)
+            for request in getattr(adapter, "_native_reply_inputs", {}).values()
+        )
+        token = "unavailable" if known else None
+    if token is None and not _is_friendly_prompt(getattr(reply, "text", None)):
         return False
     request = getattr(adapter, "_native_reply_inputs", {}).get(token)
-    # A copied marker from another author is not a native prompt. A known live
-    # prompt copied to another message is recognized only to refuse it.
-    if not own_bot_reply and request is None:
-        return False
     kind = MessageType.TEXT if getattr(message, "text", None) else adapter._media_message_type(message)
     event = adapter._build_message_event(message, kind, update_id=update_id)
     event.text = message.text or ""
@@ -82,7 +105,7 @@ async def dispatch_reply_input(adapter, message, update_id):
         return True
     if getattr(message, "caption", None) or event.message_type != MessageType.TEXT:
         event.source.message_had_attachments = True
-    valid = own_bot_reply and (request is None or request.bot_id == str(adapter._bot.id))
+    valid = token is not None and (request is None or request.bot_id == str(adapter._bot.id))
     event._native_reply_submission = NativeReplySubmission(adapter, token, valid)
     # Bypass BOTH normal session guards via the existing profile-scoped handler. Do not
     # acquire/release an agent turn or send this through client-split text batching.

@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("telegram")
 from telegram import Chat, ForceReply, Message, User
 
+from agent.i18n import SUPPORTED_LANGUAGES, t
 from gateway import hosted_room_messaging as rooms
 from gateway.hosted_room_messaging_files import FilesMenu
 from gateway.native_reply_input import text
@@ -90,6 +91,8 @@ async def open_compose(state):
     query.answer.assert_awaited_once()
     prompt = state.outgoing[-1][1]
     assert isinstance(state.outgoing[-1][0]["reply_markup"], ForceReply)
+    assert prompt.text == text("title", group="Release room") + "\n\n" + text("prompt")
+    assert menu.compose_request.token not in prompt.text
     return menu, prompt, query
 
 
@@ -129,7 +132,7 @@ async def test_real_send_uses_reply_identity_and_leaves_both_busy_guards_untouch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mismatch", ["user", "chat", "topic", "prompt", "bot", "edit", "machine", "profile", "adapter", "expired", "restart"])
+@pytest.mark.parametrize("mismatch", ["user", "chat", "topic", "prompt", "edit", "machine", "profile", "adapter", "expired", "restart"])
 async def test_foreign_expired_and_replayed_prompt_replies_never_become_bot_turns(compose, mismatch):
     state = compose
     menu, prompt, _ = await open_compose(state)
@@ -143,8 +146,6 @@ async def test_foreign_expired_and_replayed_prompt_replies_never_become_bot_turn
         kwargs["is_topic_message"] = True
     elif mismatch == "prompt":
         prompt = message(prompt.text, number=9999, user=999)
-    elif mismatch == "bot":
-        prompt = message(prompt.text, number=prompt.message_id, user=888)
     elif mismatch == "edit":
         kwargs["edit_date"] = datetime.now(timezone.utc)
     elif mismatch == "machine":
@@ -320,6 +321,79 @@ async def test_arbitrary_quoted_marker_is_not_authority_or_capture(compose):
     await reply(compose, message("[reply:0123456789abcdef]", user=222))
     assert captured[0].text == "Hello group"
     assert not compose.backend.sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
+async def test_localized_orphan_shape_only_closes_never_resolves_group(compose, monkeypatch, language):
+    # No request or receipt exists; even a plausible title cannot infer a target.
+    body = t("gateway.group_compose.title", lang=language, group="Release room")
+    body += "\n\n" + t("gateway.group_compose.prompt", lang=language)
+    monkeypatch.setattr(rooms, "list_messaging_rooms", lambda *a, **kw: pytest.fail("orphan inferred a group"))
+    await reply(compose, message(body, user=999, number=9999))
+    assert compose.adapter.send.await_args.kwargs["content"] == text("closed")
+    assert not compose.backend.sent
+    compose.runner._hm_pending_reply_intercepts.assert_not_awaited()
+    assert not compose.adapter._pending_text_batches
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    "Message to Release room",
+    "Message to Release room\n\nType your message and send. Extra text",
+    "A quote: Message to Release room\n\nType your message and send.",
+    "Message to Release room\nType your message and send.",
+    "Message to \n\nType your message and send.",
+    "Message to    \n\nType your message and send.",
+    "Message to " + "x" * 81 + "\n\nType your message and send.",
+    "[reply:0123456789abcdef]",
+    "Message to Release\u200broom\n\nType your message and send.",
+], ids=["title-only", "extra-text", "prefix", "wrong-spacing", "empty-label", "blank-label", "long-label", "old-marker", "format-control"])
+async def test_own_bot_near_matches_stay_ordinary(compose, body):
+    captured = []
+    compose.adapter._enqueue_text_event = captured.append
+    await reply(compose, message(body, user=999, number=9999))
+    assert captured[0].text == "Hello group"
+    assert not compose.backend.sent
+    compose.adapter.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_friendly_prompt_quoted_from_another_author_stays_ordinary(compose):
+    _, prompt, _ = await open_compose(compose)
+    captured = []
+    compose.adapter._enqueue_text_event = captured.append
+    await reply(compose, message(prompt.text, user=222, number=prompt.message_id))
+    assert captured[0].text == "Hello group"
+    assert not compose.backend.sent
+
+
+@pytest.mark.asyncio
+async def test_friendly_text_without_reply_is_ordinary(compose):
+    body = text("title", group="Release room") + "\n\n" + text("prompt")
+    captured = []
+    compose.adapter._enqueue_text_event = captured.append
+    await reply(compose, None, body)
+    assert captured[0].text == body
+    assert not compose.backend.sent
+
+
+@pytest.mark.asyncio
+async def test_receipt_error_rejects_known_input_without_capturing_other_replies(compose, monkeypatch):
+    from plugins.platforms.telegram import reply_input
+    _, prompt, _ = await open_compose(compose)
+
+    def unavailable(*args):
+        raise OSError("isolated test storage error")
+
+    monkeypatch.setattr(reply_input, "prompt_token", unavailable)
+    await reply(compose, message(None, number=prompt.message_id, user=999))
+    assert compose.adapter.send.await_args.kwargs["content"] == text("closed")
+    assert not compose.backend.sent
+    captured = []
+    compose.adapter._enqueue_text_event = captured.append
+    await reply(compose, message("A normal Bot answer", number=9999, user=999))
+    assert captured[0].text == "Hello group"
 
 
 @pytest.mark.asyncio
