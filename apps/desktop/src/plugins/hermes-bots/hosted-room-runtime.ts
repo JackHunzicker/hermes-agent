@@ -28,6 +28,8 @@ import {
 } from './hosted-room-approval-state'
 import { stageHostedMessageAttachments } from './hosted-room-attachments-client'
 import { noteHostedRoomMentions } from './hosted-room-attention'
+import { readHostedHistory, supportsHostedMethod } from './hosted-room-history'
+import type { HostedReadCursor } from './hosted-room-history'
 import { $hostedRoomCapabilities } from './hosted-room-capability-state'
 import {
   addHostedRoomCleanup,
@@ -737,6 +739,12 @@ export async function refreshHostedRooms() {
           continue
         }
 
+        const history = supportsHostedMethod(capability, 'groups.history', 'message_history_projection_v1') && !includeDisbanded
+          ? await readHostedHistory(read, roomId) : undefined
+        const readCursor = supportsHostedMethod(capability, 'groups.read.get', 'room_read_cursors_v1') && !includeDisbanded
+          ? await read('groups.read.get', { room_id: roomId }) as HostedReadCursor : undefined
+        if (stale() || !hostedRoomMutationIsCurrent(roomId, refreshGeneration)) continue
+
         const replayStatus = deriveFriendlyHostedRoomStatus(replay.state)
         const driver = record(stateResponse.driver_status)
 
@@ -844,6 +852,8 @@ export async function refreshHostedRooms() {
               ),
               hostedConnectionId: connectionId,
               hostedSeq: replay.state.cursor,
+              ...(history ? { hostedHistory: history } : {}),
+              ...(readCursor ? { hostedRead: readCursor } : {}),
               hostedStatus: commandFailure
                 ? {
                     canRetry: true,

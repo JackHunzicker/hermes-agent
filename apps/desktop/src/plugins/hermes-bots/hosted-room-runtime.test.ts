@@ -166,6 +166,27 @@ afterEach(() => {
 })
 
 describe('hosted Group Chat runtime', () => {
+  it('loads canonical projection and read state without rewriting the original log', async () => {
+    const descriptor = { room_id: 'room-1', name: 'History', authority_gateway_id: 'install:home', authority_epoch: 1, members: MEMBERS, latest_seq: 2 }
+    const projection = { event_id: 'original', seq: 1, thread_id: 'thread', actor: { kind: 'user', id: 'desktop' }, original_text: ' original\n', text: ' edited\n', revision: 2, deleted: false, attachments: [], reactions: [] }
+    const loaded = await loadRuntime(method => {
+      if (method === 'groups.capabilities') return { driver: true, persistent_process: true, authority_gateway_id: 'install:home', methods: ['groups.history', 'groups.read.get'], features: ['message_history_projection_v1', 'room_read_cursors_v1'] }
+      if (method === 'groups.list') return { rooms: [descriptor] }
+      if (method === 'groups.state') return { room: descriptor, driver_status: { working: false } }
+      if (method === 'groups.log') return { events: [hostedEvent(1, 'original', 'message.user', { text: ' original\n', thread_id: 'thread' }, { kind: 'user', id: 'desktop' }), hostedEvent(2, 'mutation', 'message.edited', { target_event_id: 'original', text: ' edited\n', thread_id: 'thread' }, { kind: 'user', id: 'desktop' })], latest_seq: 2, has_more: false }
+      if (method === 'groups.history') return { messages: [projection], snapshot_seq: 2, cursor: 2, has_more: false }
+      if (method === 'groups.read.get') return { room_id: 'room-1', thread_id: null, through_seq: 0, latest_seq: 2, unread_count: 1, reader: { kind: 'user', id: 'desktop' } }
+      throw new Error(`unexpected method: ${method}`)
+    })
+    loaded.chat.$groupChats.set({ History: room() })
+    await loaded.runtime.startHostedRoomRuntime(scriptedStorage(loaded.storage).storage)
+    const current = loaded.chat.$groupChats.get().History
+    expect(current.hostedHistory?.messages.original).toEqual(projection)
+    expect(current.log[0].text).toBe(' original\n')
+    expect(current.hostedRead?.unread_count).toBe(1)
+    loaded.runtime.stopHostedRoomRuntime()
+  })
+
   it('raises attention for a new hosted @user mention but not its replay after acknowledgement', async () => {
     let mention = false
 

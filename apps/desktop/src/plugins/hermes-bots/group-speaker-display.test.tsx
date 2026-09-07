@@ -58,6 +58,25 @@ async function show(room: GroupChat, members: GroupMember[] = room.members || []
 }
 
 describe('room speaker click and sidebar preview', () => {
+  it('renders current canonical text and tombstones without exposing deleted attachments', async () => {
+    const message = canonicalUser()
+    const room = userRoom([message])
+    room.hostedHistory = { snapshotSeq: 20, messages: { [message.eventId!]: {
+      event_id: message.eventId!, seq: message.seq!, thread_id: message.thread!, actor: { kind: 'user', id: 'desktop' }, original_text: message.text,
+      text: 'Current edited content', deleted: false, revision: 20, attachments: [], reactions: [{ reaction: '👍', actors: [{ kind: 'user', id: 'desktop' }] }]
+    } } }
+    await show(room)
+    expect(screen.getByText('Current edited content', { exact: true })).toBeTruthy()
+    expect(screen.getByText('👍 1', { exact: true })).toBeTruthy()
+    cleanup()
+    room.hostedHistory.messages[message.eventId!].deleted = true
+    room.hostedHistory.messages[message.eventId!].text = null
+    await show(room)
+    expect(screen.getByText('Message deleted', { exact: true })).toBeTruthy()
+    expect(screen.queryByText('Current edited content', { exact: true })).toBeNull()
+    expect(room.log[0].text).toBe(message.text)
+  })
+
   it('preserves a hosted human actor through replay, cold persistence and rendering without calling them You', async () => {
     const { createHostedRoomReplayState, reduceHostedRoomEvents } = await import('./hosted-room-client')
     const chat = await import('./group-chat')

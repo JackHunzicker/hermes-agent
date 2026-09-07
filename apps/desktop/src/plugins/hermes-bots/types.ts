@@ -224,6 +224,8 @@ export interface GroupChat {
   hostedEpoch?: null | number
   /** Last contiguous hosted-room event sequence applied locally. */
   hostedSeq?: number
+  hostedHistory?: import('./hosted-room-history').HostedHistory
+  hostedRead?: import('./hosted-room-history').HostedReadCursor
   /** Local groups.state verification; never accepted from or sent to ui_meta. */
   hostedMembersVerified?: boolean
   /** A conflicting display mirror requires a fresh authoritative membership read. */

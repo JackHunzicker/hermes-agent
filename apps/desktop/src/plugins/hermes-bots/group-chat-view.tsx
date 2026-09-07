@@ -1204,6 +1204,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
 
   // One log entry, rendered exactly as before conversation folding existed.
   const renderEntry = (entry: GroupMessage, index: number) => {
+    const projection = entry.eventId ? room.hostedHistory?.messages[entry.eventId] : undefined
+    const currentText = projection ? projection.deleted ? 'Message deleted' : projection.text || '' : entry.text
     const isUser = entry.from.kind === 'user'
     const hostedSpeaker = hostedMessageSpeaker(entry.from, room, members)
 
@@ -1297,9 +1299,9 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
               </Button>
             )}
             <span className="text-[0.625rem] text-(--ui-text-quaternary)">{relativeTime(entry.at)}</span>
-            {entry.text.trim() ? (
+            {currentText.trim() && !projection?.deleted ? (
               <div className="ml-auto shrink-0 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
-                <CopyButton appearance="icon" buttonSize="icon" stopPropagation text={entry.text} />
+                <CopyButton appearance="icon" buttonSize="icon" stopPropagation text={currentText} />
               </div>
             ) : null}
           </div>
@@ -1308,12 +1310,13 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
             // back in so drag-select and ⌘C work in group chat logs.
             data-selectable-text="true"
           >
-            {Streamdown ? <Streamdown>{entry.text}</Streamdown> : entry.text}
+            {Streamdown ? <Streamdown>{currentText}</Streamdown> : currentText}
           </div>
+          {projection?.reactions.map(reaction => <span className="mr-2 text-xs text-(--ui-text-secondary)" key={reaction.reaction}>{reaction.reaction} {reaction.actors.length}</span>)}
           {/* User attachments: what every responding bot was */
           /* shown — image previews, or a named chip for */
           /* PDFs/files. */}
-          {Array.isArray(entry.images) && entry.images.length ? (
+          {!projection?.deleted && Array.isArray(entry.images) && entry.images.length ? (
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
               {entry.images.map((img, imgIndex) =>
                 img.kind === 'pdf' || img.kind === 'file' || !img.data ? (

@@ -67,6 +67,8 @@ const MAX_HOSTED_ROOM_OUTBOX_COMMANDS = 256
 export type HostedRoomCapabilityKind = 'driver-capable' | 'transient-failure' | 'unsupported'
 
 export interface HostedRoomCapability {
+  methods?: string[]
+  features?: string[]
   authorityId: null | string
   connectionId: null | string
   exactPeerGrantRevoke: boolean
@@ -409,6 +411,8 @@ export function classifyHostedRoomCapability(
     return {
       kind: 'unsupported',
       reason: capabilities.driver === false ? 'driver-disabled' : 'incomplete-contract',
+      methods: Array.isArray(capabilities.methods) ? capabilities.methods.filter((v): v is string => typeof v === 'string') : [],
+      features: Array.isArray(capabilities.features) ? capabilities.features.filter((v): v is string => typeof v === 'string') : [],
       connectionId: localConnectionId,
       exactPeerGrantRevoke: false,
       authorityId: capabilities.driver === false ? text(capabilities.authority_gateway_id) : null,
@@ -440,6 +444,8 @@ export function classifyHostedRoomCapability(
 
   return {
     kind: 'driver-capable',
+    methods: Array.isArray(capabilities.methods) ? capabilities.methods.filter((v): v is string => typeof v === 'string') : [],
+    features: Array.isArray(capabilities.features) ? capabilities.features.filter((v): v is string => typeof v === 'string') : [],
     reason: null,
     connectionId: localConnectionId,
     exactPeerGrantRevoke:
