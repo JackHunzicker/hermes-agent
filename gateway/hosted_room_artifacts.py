@@ -1065,12 +1065,19 @@ class RoomArtifactOutbox:
         if row is None:
             raise RoomArtifactError("room artifact not found")
         path = self.blob_root / str(row["blob_name"])
-        with open_room_artifact_path(path) as (_, descriptor):
+        descriptor = (
+            _open_artifact_path_windows(path)
+            if os.name == "nt"
+            else os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        )
+        try:
             info = os.fstat(descriptor)
-            if info.st_size != int(row["size"]):
+            if not stat.S_ISREG(info.st_mode) or info.st_size != int(row["size"]):
                 raise RoomArtifactError("room artifact bytes changed")
             with os.fdopen(descriptor, "rb", closefd=False) as handle:
                 data = handle.read(MAX_ATTACHMENT_BYTES + 1)
+        finally:
+            os.close(descriptor)
         if hashlib.sha256(data).hexdigest() != str(row["sha256"]):
             raise RoomArtifactError("room artifact failed SHA-256 validation")
         return self._manifest(row), data

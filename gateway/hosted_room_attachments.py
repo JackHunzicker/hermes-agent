@@ -464,17 +464,24 @@ class HostedRoomAttachmentStore:
 
     def _read_blob(self, *, blob_id: str, size: int, sha256: str) -> bytes:
         path = self._blob_path(blob_id)
-        from gateway.hosted_room_artifacts import RoomArtifactError, open_room_artifact_path
+        from gateway.hosted_room_artifacts import RoomArtifactError, _open_artifact_path_windows
 
         try:
-            with open_room_artifact_path(path) as (_, descriptor):
-                info = os.fstat(descriptor)
-                if info.st_size != size:
-                    raise AttachmentIntegrityError("canonical attachment blob size changed")
-                with os.fdopen(descriptor, "rb", closefd=False) as handle:
-                    data = handle.read(MAX_ATTACHMENT_BYTES + 1)
+            descriptor = (
+                _open_artifact_path_windows(path)
+                if os.name == "nt"
+                else os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            )
         except (OSError, RoomArtifactError) as exc:
             raise AttachmentIntegrityError("canonical attachment blob is unavailable") from exc
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size != size:
+                raise AttachmentIntegrityError("canonical attachment blob size changed")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                data = handle.read(MAX_ATTACHMENT_BYTES + 1)
+        finally:
+            os.close(descriptor)
         if len(data) != size or hashlib.sha256(data).hexdigest() != sha256:
             raise AttachmentIntegrityError("canonical attachment blob failed SHA-256 validation")
         return data
