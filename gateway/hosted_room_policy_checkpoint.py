@@ -167,7 +167,9 @@ class HostedRoomPolicyCheckpoint:
         events_by_seq = {
             int(event["seq"]): event
             for event in (*map(_event_from_room_row, rows), *(json.loads(row["event_json"]) for row in active_rows))}
-        return [events_by_seq[seq] for seq in sorted(events_by_seq)]
+        result = [events_by_seq[seq] for seq in sorted(events_by_seq)]
+        from gateway.hosted_room_event_policy import policy_for, augment_references
+        return augment_references(conn, room_id, result, thread_id) if policy_for(conn, room_id)["mode"] == "event_driven" else result
 
     # -- per-kind projection handlers (dispatched by _apply_event) -----------
 
@@ -299,6 +301,9 @@ class HostedRoomPolicyCheckpoint:
         "room.stop_requested": _apply_stop_requested, "thread.stop_requested": _apply_thread_stop}
 
     def _apply_event(self, conn: sqlite3.Connection, event: Mapping[str, Any]) -> None:
+        from gateway.hosted_room_event_policy import apply_event
+        if apply_event(self, conn, event):
+            return
         handler = self._APPLY_BY_KIND.get(_text(event, "kind"))
         if handler is not None:
             payload = event.get("payload")
@@ -456,6 +461,9 @@ class HostedRoomPolicyCheckpoint:
     def compact_completed(self, *, room_id: str) -> None:
         """Drop any completed projections left by an interrupted sync."""
         with self._connect() as conn:
+            from gateway.hosted_room_event_policy import policy_for
+            if policy_for(conn, room_id)["mode"] == "event_driven":
+                return
             for row in conn.execute(
                 "SELECT discussion_event_id FROM hosted_room_policy_threads WHERE room_id=? AND completed=1", (room_id,)
             ).fetchall():

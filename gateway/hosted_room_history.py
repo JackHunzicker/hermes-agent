@@ -99,6 +99,8 @@ def history_page(db_path, *, room_id, thread_id=None, after_seq=0, limit=100,
         page, size = [], 0
         for message in candidates[:limit]:
             encoded_size = len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
+            if encoded_size > rooms.MAX_LOG_PAGE_BYTES - 1024:
+                raise rooms.HostedRoomError("projected message exceeds history page limit")
             if page and size + encoded_size > rooms.MAX_LOG_PAGE_BYTES - 1024:
                 break
             page.append(message)
@@ -213,3 +215,34 @@ def read_cursor(db_path, *, room_id, reader, thread_id=None, through_seq=None):
                      and m["seq"] > max(room_bound, bounds.get(m["thread_id"], 0)))
         return {"room_id": room_id, "thread_id": thread_id, "reader": reader,
                 "through_seq": max(room_bound, bounds.get(scope, 0)), "latest_seq": latest, "unread_count": unread}
+
+
+def policy_events(events):
+    """Append-only context notices; original native turns and stored events stay intact.
+
+    Source anchors must be selected from raw events before this transcript view.
+    The mutation retains its own immutable sequence, actor and event identifier.
+    """
+    from gateway.hosted_room_discussion import MAX_USER_TEXT_BYTES, _truncate_utf8_text
+    result = []
+    for event in events:
+        if event["kind"] not in MUTATION_KINDS:
+            result.append(event)
+            continue
+        payload, actor = event["payload"], event["actor"]
+        target = payload["target_event_id"]
+        if event["kind"] == "message.edited":
+            notice = f"[Message edited: {target}. Prior delivery remains historical.]\n{payload['text']}"
+        elif event["kind"] == "message.deleted":
+            notice = f"[Message deleted: {target}. Its original remains in the audit log; do not treat it as current.]"
+        else:
+            action = "added" if payload["present"] else "removed"
+            notice = f"[Reaction {action} on message {target}: {payload['reaction']}]"
+        notice = _truncate_utf8_text(notice, max_bytes=MAX_USER_TEXT_BYTES,
+            suffix="\n[Notice truncated; read the original mutation event for its complete text.]")
+        projected_payload = {"text": notice, "thread_id": payload["thread_id"]}
+        if actor["kind"] == "member":
+            projected_payload["member_id"] = actor["id"]
+        result.append({**event, "kind": "message.user" if actor["kind"] == "user" else "message.participant",
+                       "payload": projected_payload})
+    return result

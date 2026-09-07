@@ -9,12 +9,16 @@ from tests.tui_gateway.hosted_room_service_fixtures import _server
 from tests.tui_gateway.test_hosted_room_stop_replay import _room, _queue
 
 
-def test_thread_stop_is_durable_scoped_and_replay_safe(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["legacy_bounded", "event_driven"])
+def test_thread_stop_is_durable_scoped_and_replay_safe(tmp_path, monkeypatch, mode):
     db = tmp_path / "state.db"
-    _room(db)
+    room = _room(db)
+    service = HostedRoomService(_server(), db_path=db)
+    from gateway.hosted_room_responder_policy import DEFAULT_POLICY, update_policy
+    update_policy(service, room_id="room-1", event_id="policy", expected_revision=room["revision"],
+                  policy={**DEFAULT_POLICY, "mode": mode})
     first = _queue(db, task_id="first", event_id="user-1", text="First")
     other = _queue(db, task_id="other", event_id="user-2", text="Other")
-    service = HostedRoomService(_server(), db_path=db)
     from tui_gateway import methods_groups, methods_groups_controls
     monkeypatch.setattr(methods_groups, "get_hosted_room_service", lambda: service)
     server = SimpleNamespace(_methods={}, _ok=lambda rid, result: {"result": result},

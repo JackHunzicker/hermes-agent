@@ -70,6 +70,7 @@ def update_members(db_path, *, room_id, event_id, expected_revision, members, lo
             "('queued','running','indeterminate','deferred','stopping') LIMIT 1", (room_id,)).fetchone():
             raise MembershipBusyError("Stop outstanding room work before changing membership")
         active_ids = {m["member_id"] for m in normalized}
+        policy = json.loads(row["responder_policy_json"])
         retired.extend(m for m in previous if m["member_id"] not in active_ids)
         _, retired_json = rooms._validate_members(retired)
         timestamp = rooms._now(None)

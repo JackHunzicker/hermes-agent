@@ -1216,6 +1216,8 @@ def append_event(
         seq = int(room["next_seq"])
         if expected_latest_seq is not None and seq - 1 != expected_latest_seq:
             raise EventCursorConflictError("room changed before event publication")
+        from gateway.hosted_room_event_policy import require_input_capacity
+        require_input_capacity(conn, room_id, kind, payload)
         if kind in {"message.user", "message.member"}:
             from gateway.hosted_room_attachments import retain_message_attachments
             retain_message_attachments(conn, room_id=room_id, event_id=event_id,

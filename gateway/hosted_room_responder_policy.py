@@ -76,8 +76,6 @@ def update_policy(service, *, room_id, event_id, expected_revision, policy):
             raise rooms.RoomNotFoundError("hosted room not found")
         members = json.loads(row["members_json"])
         normalized = normalize_policy(policy, members)
-        if normalized["mode"] != "legacy_bounded":
-            raise rooms.HostedRoomError("event-driven continuation is not available yet")
         payload = rooms._payload_json({"policy": normalized, "expected_revision": expected_revision})
         existing = rooms._load_event(conn, room_id, event_id)
         if existing is not None:

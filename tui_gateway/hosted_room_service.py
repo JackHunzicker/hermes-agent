@@ -865,7 +865,11 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
             decision = discussion.plan_next_task(
                 room, list(snapshot.events), local_profiles=self.local_profiles(),
                 initial_watermarks=snapshot.watermarks, freeze_input_context=True)
+            from gateway.hosted_room_event_policy import service_state, publish_unavailable_mentions
+            publish_unavailable_mentions(self, room, snapshot.events)
             if decision.status == "task" and decision.task is not None:
+                if service_state(self, binding.room_id)["state"] == "cooldown":
+                    return
                 existing = driver.get_task_for_turn(self.db_path, decision.task.identity)
                 legacy_payload = dict(decision.task.payload)
                 legacy_payload.pop("input_context", None)
@@ -884,7 +888,7 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
                     admitted = existing
                 else:
                     admitted = driver.admit_task(
-                        self.db_path, decision.task.identity, payload=decision.task.payload, clock=time.time)
+                        self.db_path, decision.task.identity, payload=decision.task.payload, clock=self.runtime.clock)
                 # A stop can race the policy read from another process: re-read after admission
                 # and cancel a task whose source event is now behind the room stop fence.
                 fence = self._policy_snapshot(self._room(binding.room_id)).stopped_through_seq
@@ -1187,6 +1191,7 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
         return result
 
     def status(self, room_id: str | None = None) -> dict[str, Any]:
+        from gateway.hosted_room_event_policy import service_state
         runtime = {**self.runtime.status(), "peer_routes": self._route_statuses(room_id)}
         runtime["replication"] = self.replication.status(room_id) if self.replication is not None else {
             "running": False, "workers": 0, "routes": None, "error": self._replication_error,
@@ -1215,7 +1220,8 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
             "counts": dict(counts), "pending_actions": pending_actions,
             "needs_attention": bool(pending_actions),
             "replication": runtime["replication"],
-            "peer_routes": self._route_statuses(room_id)}
+            "peer_routes": self._route_statuses(room_id),
+            "continuation": service_state(self, room_id)}
 
 
     def _apply_pending_control_retries(

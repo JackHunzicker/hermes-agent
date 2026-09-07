@@ -703,6 +703,8 @@ def admit_task(db_path: DbPath, identity: TaskIdentity, *, payload: Any, clock: 
             if existing["payload_digest"] != payload_digest or existing["payload_json"] != payload_json:
                 raise TaskConflictError("task_id is already bound to a different payload")
             return _task_from_row(existing, idempotent=True)
+        from gateway.hosted_room_event_policy import require_admission_budget
+        require_admission_budget(conn, identity.room_id, now, RoomUnavailableError)
         from gateway.hosted_room_membership import require_active_member
         require_active_member(conn, identity.room_id, normalized_payload, error=RoomUnavailableError)
         if conn.execute(

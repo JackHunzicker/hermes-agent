@@ -746,6 +746,9 @@ def plan_next_task(
     freeze_input_context: bool = False) -> DiscussionDecision:
     """Plan one task; compacting callers freeze the exact bounded input window."""
     room = validate_room(room_value, local_profiles=local_profiles)
+    if room.responder_policy["mode"] == "event_driven":
+        from gateway.hosted_room_event_policy import plan
+        return plan(room, events, initial_watermarks=initial_watermarks, freeze_input_context=freeze_input_context)
     validated = _validated_events(events, room=room)
     if (discussion := _pending_discussion(validated)) is None:
         return DiscussionDecision(status="idle", reason="no_pending_user_event")
@@ -820,6 +823,8 @@ def reconstruct_task_plan(
         raise DiscussionReconstructionError("task source user event is missing")
     if identity.room_id != room.room_id or identity.thread_id != discussion.payload["thread_id"]:
         raise DiscussionReconstructionError("task identity does not match its room thread")
+    from gateway.hosted_room_history import policy_events
+    validated = _validated_events(policy_events(events), room=room)
     profile, target_member_id = payload.get("target_profile"), payload.get("target_member_id")
     member = next((
         m for m in (*room.members, *room.retired_members)
@@ -849,7 +854,7 @@ def reconstruct_task_plan(
         watermark = input_context["watermark"]
     else:
         watermark = _derive_member_watermarks(watermark_events).get((identity.thread_id, member.member_id), 0)
-    task_messages = tuple(event for event in validated if event.kind in {"message.user", "message.member"}
+    task_messages = tuple(event for event in validated if event.kind in {"message.user", "message.member", "message.participant"}
                           and event.payload.get("thread_id") == identity.thread_id and event.seq <= seen_through_seq)
     if input_context is not None:
         by_seq = {event.seq: event for event in task_messages}
