@@ -152,13 +152,13 @@ def _initialize(conn: sqlite3.Connection) -> None:
             BEFORE INSERT ON {table}
             WHEN EXISTS (SELECT 1 FROM {RETIREMENT_TABLE} WHERE room_id=NEW.room_id)
             BEGIN SELECT RAISE(ABORT, 'replica copy is retired'); END""")
-    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_replica_retired_event_update
+    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_replica_retired_event_update_v2
         BEFORE UPDATE ON hosted_room_replica_events
-        WHEN EXISTS (SELECT 1 FROM {RETIREMENT_TABLE} WHERE room_id=OLD.room_id)
+        WHEN EXISTS (SELECT 1 FROM {RETIREMENT_TABLE} WHERE room_id IN (OLD.room_id,NEW.room_id))
         BEGIN SELECT RAISE(ABORT, 'replica copy is retired'); END""")
-    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_replica_retired_room_update
+    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_replica_retired_room_update_v2
         BEFORE UPDATE ON hosted_room_replicas
-        WHEN EXISTS (SELECT 1 FROM {RETIREMENT_TABLE} WHERE room_id=OLD.room_id)
+        WHEN EXISTS (SELECT 1 FROM {RETIREMENT_TABLE} WHERE room_id IN (OLD.room_id,NEW.room_id))
           AND (NEW.room_id IS NOT OLD.room_id OR NEW.name IS NOT OLD.name
             OR NEW.members_json IS NOT OLD.members_json
             OR NEW.authority_gateway_id IS NOT OLD.authority_gateway_id
@@ -166,6 +166,11 @@ def _initialize(conn: sqlite3.Connection) -> None:
             OR NEW.last_seq IS NOT OLD.last_seq OR NEW.latest_seq IS NOT OLD.latest_seq
             OR NEW.disbanded_at IS NOT OLD.disbanded_at)
         BEGIN SELECT RAISE(ABORT, 'replica copy is retired'); END""")
+
+    # Install both replacement guards before retiring v1, in the caller's writer
+    # transaction. The v1 initializer can only add its old guards alongside v2.
+    conn.execute("DROP TRIGGER IF EXISTS trg_replica_retired_event_update")
+    conn.execute("DROP TRIGGER IF EXISTS trg_replica_retired_room_update")
 
 
 @contextmanager
