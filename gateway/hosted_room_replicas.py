@@ -618,6 +618,9 @@ def ingest_page(
                     room_id,
                 ),
             )
+        if terminal_at is not None:
+            from gateway.hosted_room_work_records import discard_retired_locked
+            discard_retired_locked(conn, room_id)
     return {
         "room_id": room_id,
         "stored_seq": new_last,
@@ -653,6 +656,9 @@ def replica_state(db_path: Path | str, *, room_id: Any) -> dict[str, Any]:
             if row is None
             else None
         )
+        from gateway.hosted_room_work_records import summary_locked
+        work_records = summary_locked(conn, room_id) if row is not None and row["quarantine_reason"] is None else {
+            "availability": "unavailable", "source_loss_safe": False}
     if row is None:
         if reservation is not None and reservation["owner_kind"] == "replica":
             raise ReplicaHistoryExpiredError(
@@ -661,6 +667,7 @@ def replica_state(db_path: Path | str, *, room_id: Any) -> dict[str, Any]:
         raise ReplicaError("replica not found")
     return {
         "room_id": row["room_id"],
+        "work_records": work_records,
         "name": row["name"],
         "members": json.loads(row["members_json"]),
         "authority": {

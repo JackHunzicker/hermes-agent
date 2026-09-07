@@ -84,6 +84,7 @@ def _local_room_catalog(self, profile: str, installation_id: str) -> tuple[dict,
 def _http_routes(self) -> list[tuple[str, str, Any]]:
     from gateway.platforms.api_server_room_replicas import http_routes
     from gateway.platforms.api_server_replica_retirement import http_routes as retirement_routes
+    from gateway.platforms.api_server_room_work_records import http_routes as work_record_routes
 
     async def revoke_exact(request):
         from gateway.platforms import api_server
@@ -117,7 +118,7 @@ def _http_routes(self) -> list[tuple[str, str, Any]]:
             self._handle_room_member_grant_revoke,
         ),
         ("POST", "/v1/room-members/grants/revoke-exact", revoke_exact),
-    ] + http_routes(self) + retirement_routes(self)
+    ] + http_routes(self) + retirement_routes(self) + work_record_routes(self)
 
 
 def _room_grant_token(request: "web.Request") -> str:
@@ -171,7 +172,7 @@ async def _handle_room_member_invitation(
         "authority_epoch",
         "member_id",
     }
-    allowed = required | {"grant_id", "ttl_seconds", "status_ttl_seconds", "replication"}
+    allowed = required | {"grant_id", "ttl_seconds", "status_ttl_seconds", "replication", "work_records"}
     if set(body) - allowed or not required <= set(body):
         return web.json_response(
             _openai_error(
@@ -193,7 +194,7 @@ async def _handle_room_member_invitation(
 
         profile = _effective_room_profile(_api_request_profile)
         target_install_id = hosted_rooms.local_authority_gateway_id()
-        permissions = invitation_permissions(body.get("replication", False))
+        permissions = invitation_permissions(body.get("replication", False), body.get("work_records", False))
         ttl = float(body.get("ttl_seconds", 3600))
         if not 60 <= ttl <= 24 * 60 * 60:
             raise ValueError("ttl_seconds must be between 60 and 86400")
@@ -256,6 +257,7 @@ async def _handle_room_member_invitation(
             "catalog": catalog,
             "expires_at": float(claims["expires_at"]),
             "status_expires_at": float(claims["status_expires_at"]),
+            "work_records_version": 1,
         },
         status=201,
     )
@@ -281,6 +283,7 @@ async def _handle_room_member_capabilities(
     return web.json_response({
         "object": "hermes.room_member.capabilities", **{k: claims[k] for k in _ROOM_IDENTITY_FIELDS},
         "target_profile": profile, "catalog": catalog,
+        "work_records_version": 1,
         **({"retirement_enrollment": enrollment} if enrollment is not None else {})})
 
 

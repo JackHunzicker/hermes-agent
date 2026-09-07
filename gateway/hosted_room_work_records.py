@@ -156,6 +156,37 @@ def initialize(conn: sqlite3.Connection) -> None:
         revision INTEGER NOT NULL, digest TEXT NOT NULL, record_json TEXT NOT NULL,
         status TEXT NOT NULL, PRIMARY KEY(room_id,target_install_id),
         FOREIGN KEY(room_id) REFERENCES hosted_rooms(room_id) ON DELETE CASCADE)""")
+    for operation in ("INSERT", "UPDATE"):
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_work_records_active_{operation.lower()}
+            BEFORE {operation} ON {TARGET_TABLE}
+            WHEN NOT EXISTS (SELECT 1 FROM hosted_room_replicas WHERE room_id=NEW.room_id
+                AND disbanded_at IS NULL AND quarantine_reason IS NULL)
+              OR EXISTS (SELECT 1 FROM hosted_room_quarantine WHERE room_id=NEW.room_id)
+              OR EXISTS (SELECT 1 FROM hosted_rooms WHERE room_id=NEW.room_id)
+            BEGIN SELECT RAISE(ABORT, 'passive work record target is unavailable'); END""")
+    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_work_records_disband_cleanup
+        AFTER UPDATE OF disbanded_at ON hosted_room_replicas WHEN NEW.disbanded_at IS NOT NULL
+        BEGIN DELETE FROM {TARGET_TABLE} WHERE room_id=NEW.room_id; END""")
+    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_work_records_history_cleanup
+        AFTER DELETE ON hosted_room_replicas
+        BEGIN DELETE FROM {TARGET_TABLE} WHERE room_id=OLD.room_id; END""")
+    initialize_retirement_guards(conn)
+
+
+def initialize_retirement_guards(conn):
+    """Either owner may initialize first; persist guards for older SQLite writers."""
+    from gateway.hosted_room_replica_retirement import RETIREMENT_TABLE
+    if not table_exists(conn, TARGET_TABLE) or not table_exists(conn, RETIREMENT_TABLE):
+        return
+    for operation in ("INSERT", "UPDATE"):
+        ids = "NEW.room_id" if operation == "INSERT" else "NEW.room_id,OLD.room_id"
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_work_records_retired_{operation.lower()}
+            BEFORE {operation} ON {TARGET_TABLE}
+            WHEN EXISTS (SELECT 1 FROM {RETIREMENT_TABLE} WHERE room_id IN ({ids}))
+            BEGIN SELECT RAISE(ABORT, 'replica copy is retired'); END""")
+    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_work_records_retired_cleanup
+        AFTER INSERT ON {RETIREMENT_TABLE}
+        BEGIN DELETE FROM {TARGET_TABLE} WHERE room_id=NEW.room_id; END""")
 
 
 def _budget(conn, table, room_id, data, target_install_id=None):
@@ -186,12 +217,21 @@ def _capture_tasks(conn, room_id):
     from gateway import hosted_room_driver as driver
     if not table_exists(conn, "hosted_room_driver_tasks"):
         return [], [], "task_store_missing"
+    # Published terminal records already travel in canonical history. Keep
+    # outstanding tasks and unacknowledged publications within this small slice.
+    published = ""
+    if table_exists(conn, "hosted_room_policy_publications"):
+        published = """NOT EXISTS (SELECT 1 FROM hosted_room_policy_publications AS p
+            WHERE p.room_id=t.room_id AND p.task_id=t.task_id AND p.kind IN ('turn.settled','turn.failed','turn.cancelled'))"""
+    task_filter = f" AND (status NOT IN ('settled','failed','cancelled') OR {published})" if published else ""
     rows = conn.execute("""SELECT task_id,thread_id,turn_id,source_event_seq,payload_json,payload_digest,
         status,execution_generation,cancel_generation,settlement_id,cancel_id
-        FROM hosted_room_driver_tasks WHERE room_id=? ORDER BY task_id LIMIT ?""", (room_id, MAX_TASKS + 1)).fetchall()
+        FROM hosted_room_driver_tasks AS t WHERE room_id=?""" + task_filter + " ORDER BY task_id LIMIT ?",
+        (room_id, MAX_TASKS + 1)).fetchall()
     receipts = [dict(row) for row in conn.execute(
-        f"SELECT {','.join(sorted(_RECEIPT_FIELDS))} FROM hosted_room_remote_runs WHERE room_id=?"
-        " ORDER BY task_id,execution_generation,member_id LIMIT ?", (room_id, MAX_RECEIPTS + 1))]
+        f"SELECT {','.join(sorted(_RECEIPT_FIELDS))} FROM hosted_room_remote_runs AS t WHERE room_id=?"
+        + (f" AND {published}" if published else "") + " ORDER BY task_id,execution_generation,member_id LIMIT ?",
+        (room_id, MAX_RECEIPTS + 1))]
     if len(rows) > MAX_TASKS or len(receipts) > MAX_RECEIPTS:
         return [], [], "bounds_exceeded"
     tasks = []
@@ -245,6 +285,7 @@ def capture_locked(conn, *, room_id, local_gateway_id, through_seq=None):
         record = {**content, "revision": revision, "digest": digest(content)}
     try:
         validate(record)
+        _validate_roster(record, json.loads(room["members_json"]))
     except WorkRecordError:
         if reason is not None:
             raise
@@ -314,6 +355,46 @@ def ingest(db_path, *, record: dict, token: str, secret: bytes, target_install_i
 def discard_retired_locked(conn, room_id):
     if table_exists(conn, TARGET_TABLE):
         conn.execute(f"DELETE FROM {TARGET_TABLE} WHERE room_id=?", (room_id,))
+
+
+def prepare_delivery_locked(conn, *, room_id, target_install_id, route_generation, local_gateway_id, through_seq):
+    """Keep the unresolved payload across process restarts and scoped-grant replacement."""
+    initialize(conn)
+    key = (room_id, target_install_id)
+    old = conn.execute(f"SELECT * FROM {PENDING_TABLE} WHERE room_id=? AND target_install_id=?", key).fetchone()
+    if old is not None and old["status"] != "acked":
+        if old["route_generation"] == route_generation and old["status"] in {"rejected", "needs_reauthorization", "invalid_ack"}:
+            return None
+        record = validate(json.loads(old["record_json"]))
+        current = conn.execute("SELECT authority_gateway_id,authority_epoch,members_json FROM hosted_rooms WHERE room_id=?", (room_id,)).fetchone()
+        if (current is None or record["home_install_id"] != local_gateway_id
+                or record["authority"] != {"gateway_id": current["authority_gateway_id"], "epoch": current["authority_epoch"]}
+                or record["roster_sha256"] != roster_digest(json.loads(current["members_json"]))):
+            raise WorkRecordError("pending work record source changed")
+    else:
+        record = capture_locked(conn, room_id=room_id, local_gateway_id=local_gateway_id, through_seq=through_seq)
+        if old is not None and (old["revision"], old["digest"]) == (record["revision"], record["digest"]):
+            return None
+    if record["history"]["seq"] > through_seq:
+        raise WorkRecordPrefixError("pending work record awaits history")
+    data = encode(record)
+    _budget(conn, PENDING_TABLE, room_id, data, target_install_id)
+    conn.execute(f"INSERT OR REPLACE INTO {PENDING_TABLE} VALUES (?,?,?,?,?,?,?)",
+                 (*key, route_generation, record["revision"], record["digest"], data, "pending"))
+    return record
+
+
+def delivery_status_locked(conn, *, room_id, target_install_id, route_generation, record, status):
+    conn.execute(f"""UPDATE {PENDING_TABLE} SET status=? WHERE room_id=? AND target_install_id=?
+        AND route_generation=? AND revision=? AND digest=?""",
+                 (status, room_id, target_install_id, route_generation, record["revision"], record["digest"]))
+
+
+def delivery_summaries_locked(conn, room_id=None):
+    if not table_exists(conn, PENDING_TABLE):
+        return []
+    return [dict(row) for row in conn.execute(f"""SELECT room_id,target_install_id,revision,digest,status
+        FROM {PENDING_TABLE} WHERE (? IS NULL OR room_id=?) ORDER BY room_id,target_install_id""", (room_id, room_id))]
 
 
 def summary_locked(conn, room_id):

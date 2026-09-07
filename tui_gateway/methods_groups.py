@@ -314,7 +314,7 @@ def _(rid, params: dict, db_path, _catalog=_local_catalog, _expiry=_grant_expiry
         authority_epoch=int(params.get("authority_epoch") or 0),
         member_id=str(params.get("member_id") or ""), target_install_id=installation_id,
         target_profile=profile, execution_policy_digest=execution_policy["policy_digest"],
-        permissions=invitation_permissions(params.get("replication", False)),
+        permissions=invitation_permissions(params.get("replication", False), params.get("work_records", False)),
         ttl_seconds=ttl, status_ttl_seconds=status_ttl)
     claims = decode_room_grant(grant_secret, token, permission="status")
     reserve_grant_state(_profile_state_db_paths(profile), claims=claims, expires_at=_expiry(claims))
@@ -322,7 +322,7 @@ def _(rid, params: dict, db_path, _catalog=_local_catalog, _expiry=_grant_expiry
     return _ok(rid, {
         "grant": token, "target_profile": profile, "catalog": catalog,
         "endpoint": catalog["endpoint"], "expires_at": float(claims["expires_at"]),
-        "status_expires_at": float(claims["status_expires_at"])})
+        "status_expires_at": float(claims["status_expires_at"]), "work_records_version": 1})
 
 
 @_room_method("groups.peer.revoke", code=4122, db=True)

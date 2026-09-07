@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -19,6 +20,7 @@ from typing import Any
 
 from gateway import hosted_room_links as links
 from gateway import hosted_rooms as rooms
+from gateway import hosted_room_work_records as work_records
 from gateway import hosted_room_replica_retirement as retirement
 from gateway.hosted_room_peer import PROTOCOL_VERSION, _split_token, gateway_room_grant_secret
 from gateway.hosted_rooms_common import open_sqlite, table_exists
@@ -119,6 +121,7 @@ class HostedRoomReplicationPublisher:
         self._retirement_delays: dict[_RetirementWork, float] = {}
         self._scan_at = 0.0
         self._error: str | None = None
+        self._work_record_error: str | None = None
         with self._transaction() as conn:
             conn.execute(f"""CREATE TABLE IF NOT EXISTS {_TABLE} (
                 room_id TEXT NOT NULL, member_id TEXT NOT NULL, generation TEXT NOT NULL,
@@ -376,8 +379,9 @@ class HostedRoomReplicationPublisher:
             route = _Route((link.room_id, link.member_id), link, room, _generation(link, room))
             checkpoint = self._checkpoint(route)
             if checkpoint is not None and checkpoint["status"] not in _BLOCKED:
-                selected.append((checkpoint["status"] == "unavailable", route.key, route))
-        return min(selected, key=lambda item: item[:2])[2] if selected else None
+                opted_in = work_records.PERMISSION in _replication_hint(link.grant).get("permissions", ())
+                selected.append((checkpoint["status"] == "unavailable", not opted_in, route.key, route))
+        return min(selected, key=lambda item: item[:3])[3] if selected else None
 
     def _target_checkpoint(self, route: _Route) -> dict | None:
         lineage = _digest([route.room["authority_gateway_id"], route.room["authority_epoch"], route.room["members"]])
@@ -441,7 +445,7 @@ class HostedRoomReplicationPublisher:
                 return False
         cursor, pending = checkpoint["acked_seq"], checkpoint["pending_end"]
         if pending is None and cursor >= route.room["latest_seq"] and checkpoint["status"] == "acked":
-            return False
+            return self._publish_work_records(route, checkpoint, client)
         limit = PAGE_LIMIT if pending is None else max(1, pending - cursor)
         page = rooms.read_events(
             self.db_path, room_id=key[0], since_seq=cursor, limit=limit, include_disbanded=True,
@@ -489,6 +493,47 @@ class HostedRoomReplicationPublisher:
         )
         return saved and page["has_more"]
 
+    def _publish_work_records(self, route, checkpoint, client) -> bool:
+        if work_records.PERMISSION not in _replication_hint(route.link.grant).get("permissions", ()):
+            return False
+        try:
+            with self._transaction() as conn:
+                if not self._current(conn, route):
+                    return False
+                record = work_records.prepare_delivery_locked(
+                    conn, room_id=route.key[0], target_install_id=route.link.catalog.installation_id,
+                    route_generation=route.generation, local_gateway_id=self.local_id, through_seq=checkpoint["acked_seq"])
+            if record is None or self._stop.is_set():
+                return False
+            status = "acked"
+            prefix_gap = False
+            try:
+                reply = client.replicate_work_records(grant=route.link.grant, target_profile=route.link.target_profile, record=record)
+                if (not isinstance(reply, dict) or reply.get("room_id") != route.key[0]
+                        or type(reply.get("revision")) is not int or reply["revision"] != record["revision"]
+                        or reply.get("digest") != record["digest"] or reply.get("passive") is not True):
+                    status = "invalid_ack"
+            except PeerRunsHTTPError as exc:
+                status = "unavailable"
+                prefix_gap = exc.status_code == 409 and exc.error_code == "work_records_prefix"
+                if exc.status_code in {401, 403}:
+                    status = "needs_reauthorization"
+                elif exc.status_code is not None and 400 <= exc.status_code < 500 and exc.status_code not in {408, 429} and not prefix_gap:
+                    status = "rejected"
+            with self._transaction() as conn:
+                if self._current(conn, route):
+                    work_records.delivery_status_locked(
+                        conn, room_id=route.key[0], target_install_id=route.link.catalog.installation_id,
+                        route_generation=route.generation, record=record, status=status)
+            if prefix_gap:
+                self._save(route, checkpoint, acked_seq=0, pending_end=None, pending_latest=None, pending_name=None, status="replica_gap")
+            self._work_record_error = None
+        except work_records.WorkRecordPrefixError:
+            return False  # the source grew before this snapshot; copy history first
+        except (work_records.WorkRecordError, sqlite3.Error, OSError):
+            self._work_record_error = "work_record_capture_unavailable"
+        return False
+
     def _http_failure(self, route: _Route, checkpoint: dict, exc: PeerRunsHTTPError) -> bool:
         if exc.status_code == 409 and exc.error_code == "room_replica_gap":
             self._save(route, checkpoint, acked_seq=0, pending_end=None, pending_latest=None,
@@ -509,6 +554,7 @@ class HostedRoomReplicationPublisher:
         try:
             with closing(open_sqlite(self.db_path, timeout=0.25)) as conn:
                 has_retirement = table_exists(conn, retirement.HOME_TABLE)
+                record_deliveries = work_records.delivery_summaries_locked(conn, room_id)
                 rows = conn.execute(f"""SELECT r.room_id, member_id, r.target_install_id, target_profile,
                     authority_gateway_id, authority_epoch, r.acked_seq, r.source_latest_seq, r.status, r.updated_at,
                     t.selected_member_id, t.acked_seq AS target_acked_seq, t.status AS target_status,
@@ -525,10 +571,11 @@ class HostedRoomReplicationPublisher:
             if has_retirement:
                 retirements = retirement.home_status(self.db_path, room_id=room_id)
         except (OSError, sqlite3.Error):
-            routes, retirements, error = None, None, "publisher_status_unavailable"
+            routes, retirements, record_deliveries, error = None, None, None, "publisher_status_unavailable"
         return {
             "running": any(t.is_alive() for t in self._threads), "stopping": self._stop.is_set(),
             "workers": sum(t.is_alive() for t in self._threads), "routes": routes,
             "retirements": retirements,
+            "work_records": record_deliveries, "work_records_error": self._work_record_error,
             "error": error, "mode": "passive_async_copy", "source_loss_safe": False,
         }
