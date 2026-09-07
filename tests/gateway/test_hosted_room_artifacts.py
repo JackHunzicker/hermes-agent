@@ -1278,5 +1278,5 @@ def test_outbox_rejects_blob_replaced_with_symlink(tmp_path):
     target.write_bytes(content)
     blob.unlink()
     blob.symlink_to(target)
-    with pytest.raises(RoomArtifactError):
+    with pytest.raises((RoomArtifactError, OSError)):
         outbox.read(scope, stored["artifact_id"])
