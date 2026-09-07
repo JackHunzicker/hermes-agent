@@ -374,10 +374,12 @@ class HostedRoomReplicationPublisher:
             ).fetchall()
             target = conn.execute(f"SELECT * FROM {_TARGET_TABLE} WHERE room_id=? AND target_install_id=?",
                                   (initial.key[0], initial.link.catalog.installation_id)).fetchone()
+            work_ready = (target is not None and (target["acked_seq"] > 0 or target["status"] == "acked")
+                          and work_records.pending_delivery_is_anchored_locked(
+                              conn, room_id=initial.key[0], target_install_id=initial.link.catalog.installation_id,
+                              through_seq=target["acked_seq"]))
         selected = []
         room = rooms.room_state(self.db_path, room_id=initial.key[0], include_disbanded=True)
-        history_needed = (target is None or target["pending_end"] is not None
-                          or target["acked_seq"] < room["latest_seq"] or target["status"] != "acked")
         for raw in candidates:
             if not _replication_hint(raw["grant"]):
                 continue
@@ -398,9 +400,20 @@ class HostedRoomReplicationPublisher:
                 # Equal transient work failures must get their existing queue
                 # turns; a stable member key otherwise pins retries to one peer.
                 turn_rank = route.key != initial.key if work_rank == 0 and work_unavailable else False
-                rank = (unavailable, work_rank, work_unavailable, False) if history_needed else (work_rank, work_unavailable, turn_rank, unavailable)
-                selected.append((*rank, route.key, route))
-        return min(selected, key=lambda item: item[:5])[5] if selected else None
+                selected.append((unavailable, work_rank, work_unavailable, turn_rank, route.key, route))
+        # Prioritize a covered work anchor only when some current route can
+        # attempt it. Blocked work must not hide an otherwise healthy history path.
+        can_deliver_work = work_ready and any(item[1] == 0 for item in selected)
+        history_needed = not can_deliver_work and (target is None or target["pending_end"] is not None
+                          or target["acked_seq"] < room["latest_seq"] or target["status"] != "acked")
+
+        def rank(item):
+            unavailable, work_rank, work_unavailable, turn_rank, key, _ = item
+            if history_needed:
+                return unavailable, work_rank, work_unavailable, turn_rank, key
+            return work_rank, work_unavailable, turn_rank, unavailable, key
+
+        return min(selected, key=rank)[5] if selected else None
 
     def _target_checkpoint(self, route: _Route) -> dict | None:
         lineage = _digest([route.room["authority_gateway_id"], route.room["authority_epoch"], route.room["members"]])
@@ -462,9 +475,13 @@ class HostedRoomReplicationPublisher:
                     return False
             elif enrollment["state"] != "enrolled":
                 return False
+        # Stage one immutable record before copying more history. Each turn can
+        # deliver an anchored record and one history page, so neither waits for
+        # the conversation to become quiet or blocks the other on transport loss.
+        self._publish_work_records(route, checkpoint, client)
         cursor, pending = checkpoint["acked_seq"], checkpoint["pending_end"]
         if pending is None and cursor >= route.room["latest_seq"] and checkpoint["status"] == "acked":
-            return self._publish_work_records(route, checkpoint, client)
+            return False
         limit = PAGE_LIMIT if pending is None else max(1, pending - cursor)
         page = rooms.read_events(
             self.db_path, room_id=key[0], since_seq=cursor, limit=limit, include_disbanded=True,
@@ -526,7 +543,8 @@ class HostedRoomReplicationPublisher:
                 record = work_records.prepare_delivery_locked(
                     conn, room_id=route.key[0], target_install_id=route.link.catalog.installation_id,
                     route_generation=route.generation, local_gateway_id=self.local_id, through_seq=checkpoint["acked_seq"])
-            if record is None or self._stop.is_set():
+            history_confirmed = checkpoint["acked_seq"] > 0 or checkpoint["status"] == "acked"
+            if record is None or not history_confirmed or self._stop.is_set():
                 return False
             status = "acked"
             prefix_gap = False
@@ -552,10 +570,12 @@ class HostedRoomReplicationPublisher:
                         conn.execute(f"UPDATE {_TABLE} SET work_record_status=? WHERE room_id=? AND member_id=? AND generation=?",
                                      (status, *route.key, route.generation))
             if prefix_gap:
-                self._save(route, checkpoint, acked_seq=0, pending_end=None, pending_latest=None, pending_name=None, status="replica_gap")
+                reset = dict(acked_seq=0, pending_end=None, pending_latest=None, pending_name=None, status="replica_gap")
+                if self._save(route, checkpoint, **reset):
+                    checkpoint.update(reset)
             self._work_record_error = None
         except work_records.WorkRecordPrefixError:
-            return False  # the source grew before this snapshot; copy history first
+            return False  # source history needed for capture is no longer retained
         except (work_records.WorkRecordError, sqlite3.Error, OSError):
             self._work_record_error = "work_record_capture_unavailable"
         return False

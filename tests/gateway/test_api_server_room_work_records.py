@@ -64,6 +64,51 @@ def publisher(source, http, reply, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_continuous_history_and_task_changes_deliver_over_http_after_lost_record_ack(setup, monkeypatch):
+    source, target, app = setup
+    seed(source)
+    sent = []
+
+    @web.middleware
+    async def lose_first_record_ack(request, handler):
+        response = await handler(request)
+        if request.path.endswith("/work-records"):
+            assert response.status == 200
+            with sqlite3.connect(target) as conn:
+                accepted = conn.execute(f"SELECT record_json FROM {records.TARGET_TABLE} WHERE room_id='room'").fetchone()
+            sent.append(json.loads(accepted[0]))
+            if len(sent) == 1:
+                return web.json_response({"error": {"code": "unavailable"}}, status=503)
+        return response
+
+    app.middlewares.append(lose_first_record_ack)
+    async with TestClient(TestServer(app)) as http:
+        invited = await invitation(http)
+        pub = publisher(source, http, invited, monkeypatch)
+        for turn in range(6):
+            rooms.append_event(source, room_id="room", event_id=f"busy-{turn}", kind="message.user",
+                               actor={"kind": "user", "id": "owner"}, payload={"text": "Continue"},
+                               authority_gateway_id=HOME, authority_epoch=1)
+            if turn == 1:
+                held = driver.acquire_lease(source, room_id="room", gateway_id=HOME, authority_epoch=1,
+                                            process_generation="process", ttl_seconds=30, clock=lambda: 100)
+                driver.start_task(source, TASK, held, expected_cancel_generation=0, clock=lambda: 100)
+            if turn == 2:
+                pub = publisher(source, http, invited, monkeypatch)
+            await asyncio.to_thread(pub._publish_one, ("room", "reviewer"))
+        assert len(sent) >= 3
+        assert sent[0] == sent[1]
+        assert sent[0]["tasks"][0]["phase"] == "queued"
+        assert sent[-1]["tasks"][0]["phase"] == "running"
+        latest = rooms.room_state(source, room_id="room")["latest_seq"]
+        state = replicas.replica_state(target, room_id="room")
+        assert state["last_seq"] == latest
+        assert latest - state["work_records"]["history"]["seq"] <= 2
+        assert state["work_records"]["source_loss_safe"] is False
+        assert rooms.list_rooms(target) == []
+
+
+@pytest.mark.asyncio
 async def test_explicit_records_are_passively_retained_and_summarized(setup):
     source, target, app = setup
     seed(source)
