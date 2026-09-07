@@ -175,3 +175,41 @@ def mutate_message(db_path, *, room_id, event_id, target_event_id, actor, operat
 
 def mutation_event_id(client_event_id):
     return "mutation:" + hashlib.sha256(rooms._event_id(client_event_id).encode()).hexdigest()
+
+
+def read_cursor(db_path, *, room_id, reader, thread_id=None, through_seq=None):
+    """Read/advance one viewer's durable bounds; receipt delivery is unrelated."""
+    room_id = rooms._room_id(room_id)
+    if not isinstance(reader, dict) or reader.get("kind") not in {"user", "member"}:
+        raise rooms.HostedRoomError("reader must be a user or member actor")
+    reader, _ = rooms._validate_actor(reader, kind="message.user" if reader["kind"] == "user" else "message.member")
+    scope = "" if thread_id is None else rooms._event_id(thread_id)
+    if through_seq is not None:
+        through_seq = rooms._non_negative(through_seq, "through_seq")
+    with rooms._transaction(db_path, immediate=True) as conn:
+        room = _snapshot(conn, room_id)
+        latest = int(room["next_seq"]) - 1
+        if through_seq is not None and through_seq > latest:
+            raise rooms.HostedRoomError("read cursor is ahead of room history")
+        messages = _load_projection(conn, room_id, latest)
+        if scope and not any(m["thread_id"] == scope for m in messages):
+            raise rooms.HostedRoomError("thread not found in room")
+        conn.execute("""CREATE TABLE IF NOT EXISTS hosted_room_read_cursors (
+            room_id TEXT NOT NULL REFERENCES hosted_rooms(room_id) ON DELETE CASCADE,
+            reader_kind TEXT NOT NULL, reader_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+            through_seq INTEGER NOT NULL CHECK(through_seq>=0),
+            PRIMARY KEY(room_id, reader_kind, reader_id, thread_id))""")
+        key = (room_id, reader["kind"], reader["id"])
+        if through_seq is not None:
+            _active_actor(room, reader)
+            conn.execute("""INSERT INTO hosted_room_read_cursors VALUES (?,?,?,?,?)
+                ON CONFLICT(room_id,reader_kind,reader_id,thread_id) DO UPDATE
+                SET through_seq=MAX(through_seq,excluded.through_seq)""", (*key, scope, through_seq))
+        bounds = {row["thread_id"]: int(row["through_seq"]) for row in conn.execute(
+            "SELECT thread_id,through_seq FROM hosted_room_read_cursors WHERE room_id=? AND reader_kind=? AND reader_id=?", key)}
+        room_bound = bounds.get("", 0)
+        unread = sum(1 for m in messages if not m["deleted"] and _actor_key(m["actor"]) != _actor_key(reader)
+                     and (not scope or m["thread_id"] == scope)
+                     and m["seq"] > max(room_bound, bounds.get(m["thread_id"], 0)))
+        return {"room_id": room_id, "thread_id": thread_id, "reader": reader,
+                "through_seq": max(room_bound, bounds.get(scope, 0)), "latest_seq": latest, "unread_count": unread}

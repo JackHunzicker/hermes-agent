@@ -3,8 +3,8 @@ from .method_ctx import HandlerRegistry
 
 _registry = HandlerRegistry()
 METHODS = ("groups.history", "groups.history.search", "groups.message.edit",
-           "groups.message.delete", "groups.message.react")
-FEATURES = ("message_history_projection_v1", "message_history_search_v1", "message_mutations_v1")
+           "groups.message.delete", "groups.message.react", "groups.read.get", "groups.read.mark")
+FEATURES = ("message_history_projection_v1", "message_history_search_v1", "message_mutations_v1", "room_read_cursors_v1")
 
 
 def _register_handler(name):
@@ -13,6 +13,13 @@ def _register_handler(name):
         from gateway import hosted_room_history as history, hosted_rooms as rooms
         from gateway.hosted_room_capabilities import RoomReaderUpgradeRequired
         try:
+            if _name.startswith("groups.read."):
+                if _name.endswith("mark") and params.get("through_seq") is None:
+                    raise rooms.HostedRoomError("through_seq is required")
+                state = history.read_cursor(rooms.default_db_path(), room_id=params.get("room_id"),
+                    reader={"kind": "user", "id": "desktop"}, thread_id=params.get("thread_id"),
+                    through_seq=params.get("through_seq") if _name.endswith("mark") else None)
+                return _ok(rid, state)
             if _name.startswith("groups.history"):
                 if _name.endswith("search") and not params.get("query"):
                     raise rooms.HostedRoomError("query is required")
