@@ -1,6 +1,8 @@
 """Native publisher threads, real HTTP loss, and independent SQLite stores."""
 
 import asyncio
+import multiprocessing
+from contextlib import suppress
 
 import pytest
 from aiohttp import web
@@ -30,6 +32,19 @@ def make_publisher(source, monkeypatch):
     with monkeypatch.context() as scoped:
         scoped.setattr(rooms, "local_authority_gateway_id", lambda: HOME)
         return HostedRoomReplicationPublisher(source)
+
+
+def run_publisher_process(source, control):
+    rooms.local_authority_gateway_id = lambda: HOME
+    publisher = HostedRoomReplicationPublisher(source)
+    publisher.start()
+    try:
+        if control.poll(20):
+            control.recv()
+    finally:
+        control.close()
+        if not publisher.stop(timeout=5):
+            raise RuntimeError("test publisher did not stop")
 
 
 @pytest.mark.asyncio
@@ -120,3 +135,84 @@ async def test_replica_capacity_recovers_without_new_authorization(setup, monkey
         await asyncio.to_thread(publisher._publish_one, ("room", "reviewer"))
         assert publisher.status("room")["routes"][0]["status"] == "acked"
         assert replicas.replica_state(target, room_id="room")["last_seq"] == 1
+
+
+@pytest.mark.asyncio
+async def test_publisher_process_death_after_remote_write_replays_without_duplicates(setup):
+    source, target, app = setup
+    accepted, release = asyncio.Event(), asyncio.Event()
+    hold_first = True
+
+    @web.middleware
+    async def hold_after_persistence(request, handler):
+        nonlocal hold_first
+        response = await handler(request)
+        if request.path.endswith("/replica") and response.status == 200 and hold_first:
+            hold_first = False
+            accepted.set()
+            await release.wait()
+        return response
+
+    app.middlewares.append(hold_after_persistence)
+    context = multiprocessing.get_context("spawn")
+    children = []
+    async with TestClient(TestServer(app)) as http:
+        token = await invite(http, replication=True)
+        client = PeerRunsHTTPClient(base_url=str(http.make_url("/")), api_key="", timeout_seconds=3)
+        probe = await asyncio.to_thread(client.probe, grant=token)
+        links.save_room_link(source, links.make_stored_link(
+            room_id="room", member_id="reviewer", target_url=str(http.make_url("/")),
+            target_profile="default", grant=token,
+            catalog=peer.GatewayRoomCatalog.from_mapping(probe["catalog"]),
+            cancellation_scope_id="test-cancel", trace_id="test-trace",
+        ))
+        try:
+            receive, control = context.Pipe(duplex=False)
+            first = context.Process(target=run_publisher_process, args=(source, receive))
+            children.append((first, control))
+            first.start()
+            receive.close()
+            await asyncio.wait_for(accepted.wait(), timeout=12)
+            first.terminate()
+            await asyncio.to_thread(first.join, 5)
+            assert not first.is_alive()
+            assert first.exitcode != 0
+            release.set()
+            assert replicas.replica_state(target, room_id="room")["last_seq"] == 1
+            with rooms._transaction(source) as conn:
+                assert conn.execute("SELECT acked_seq FROM hosted_room_replication_targets").fetchone()[0] == 0
+            rooms.append_event(
+                source, room_id="room", event_id="after-crash", kind="message.user",
+                actor={"kind": "user", "id": "owner"}, payload={"text": "Resume after process death"},
+                authority_gateway_id=HOME, authority_epoch=1,
+            )
+            receive, control = context.Pipe(duplex=False)
+            second = context.Process(target=run_publisher_process, args=(source, receive))
+            children.append((second, control))
+            second.start()
+            receive.close()
+
+            def copied():
+                return replicas.replica_state(target, room_id="room")["last_seq"] == 2
+
+            await wait_until(copied)
+            with rooms._transaction(target) as conn:
+                copied_ids = conn.execute("SELECT event_id FROM hosted_room_replica_events ORDER BY seq").fetchall()
+            assert [row[0] for row in copied_ids] == ["hello", "after-crash"]
+            assert replicas.replica_state(target, room_id="room")["safety_status"] == "passive"
+            control.send("stop")
+            await asyncio.to_thread(second.join, 5)
+            assert second.exitcode == 0
+        finally:
+            release.set()
+            for child, control in children:
+                if child.is_alive():
+                    with suppress(BrokenPipeError, OSError):
+                        control.send("stop")
+                await asyncio.to_thread(child.join, 5)
+                if child.is_alive():
+                    child.terminate()
+                    await asyncio.to_thread(child.join, 5)
+                assert not child.is_alive()
+                control.close()
+                child.close()
