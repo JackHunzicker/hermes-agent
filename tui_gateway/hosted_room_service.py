@@ -895,6 +895,17 @@ class HostedRoomService(HostedRoomArtifactMixin):
         self.runtime.wakeup()
         return room
 
+    def update_members(self, *, room_id: str, event_id: str, expected_revision: int, members: Any) -> dict[str, Any]:
+        from gateway.hosted_room_membership import update_members
+        with self._policy_lock:
+            self._owned_room(room_id)
+            result = update_members(
+                self.db_path, room_id=room_id, event_id=event_id, expected_revision=expected_revision,
+                members=members, local_profiles=self.local_profiles(),
+                authority_gateway_id=hosted_rooms.local_authority_gateway_id())
+        self.runtime.wakeup()
+        return result
+
     def send(
         self,
         *,

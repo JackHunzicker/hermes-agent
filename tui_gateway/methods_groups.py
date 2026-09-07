@@ -20,7 +20,7 @@ method = _registry.method
 _METHODS = (
     "groups.capabilities", "groups.list", "groups.create", "groups.state", "groups.send",
     "groups.attachment.put", "groups.attachment.list", "groups.attachment.read",
-    "groups.rename", "groups.log", "groups.disband", "groups.replica_state",
+    "groups.rename", "groups.members.update", "groups.log", "groups.disband", "groups.replica_state",
     "groups.stop", "groups.retry", "groups.approve",
     "groups.replication.prepare", "groups.replication.enroll", "groups.replication.revoke",
     "groups.peer.invite", "groups.peer.revoke", "groups.peer.revoke_exact", "groups.peer.register",
@@ -259,7 +259,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
             "authority_epoch", "coordinator_fencing", "room_identity", "monotonic_log",
             "desktop_compatibility_mailbox", "reciprocal_room_control", "reciprocal_room_control_setup",
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity", "peer_route_grant_fingerprint",
-            "peer_grant_renewal",
+            "peer_grant_renewal", "local_membership_revision", "historical_member_identity",
             ] + (["authenticated_replication", "replica_retirement"] if room_link.get("enabled") else []),
         "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
 
@@ -480,6 +480,15 @@ def _(rid, params: dict, service) -> dict:
     room = service.create_room(
         room_id=params.get("room_id"), name=params.get("name"), members=params.get("members"))
     return _ok(rid, {"room": room})
+
+
+@_room_method("groups.members.update", code=5120, room_code=4124, service_code=4123,
+              service_message=_WORKER_UNAVAILABLE)
+def _(rid, params: dict, service) -> dict:
+    """Replace idle local membership without discarding historical authors."""
+    return _ok(rid, {"room": service.update_members(
+        room_id=params.get("room_id"), event_id=params.get("event_id"),
+        expected_revision=params.get("expected_revision"), members=params.get("members"))})
 
 
 @_room_method("groups.state", code=5115, room_code=4114, db=True)

@@ -105,6 +105,7 @@ class DiscussionRoom:
     members: tuple[DiscussionMember, ...]
     gateway_id: str
     authority_epoch: int
+    retired_members: tuple[DiscussionMember, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -301,7 +302,12 @@ def validate_room(value: Any, *, local_profiles: Iterable[str]) -> DiscussionRoo
     gateway_id = _identifier(value.get("authority_gateway_id"), label="authority_gateway_id")
     authority_epoch = _positive_int(value.get("authority_epoch"), label="authority_epoch")
     members = validate_roster(value.get("members"), local_profiles=local_profiles)
-    return DiscussionRoom(room_id, name, members, gateway_id, authority_epoch)
+    retired_raw = value.get("retired_members", [])
+    if not isinstance(retired_raw, list) or len(retired_raw) > hosted_rooms.MAX_MEMBERS:
+        raise DiscussionValidationError("invalid retired member roster")
+    retired_profiles = {m.get("profile") for m in retired_raw if isinstance(m, Mapping)}
+    retired = tuple(_validate_member(m, i, retired_profiles) for i, m in enumerate(retired_raw))
+    return DiscussionRoom(room_id, name, members, gateway_id, authority_epoch, retired)
 
 
 def is_pass_text(value: Any) -> bool:
@@ -354,7 +360,7 @@ def _require_gateway_actor(actor: Mapping[str, Any], room: DiscussionRoom, messa
 
 def _member_by_id(room: DiscussionRoom, member_id: Any) -> DiscussionMember:
     normalized = _identifier(member_id, label="member_id")
-    if (member := next((m for m in room.members if m.member_id == normalized), None)) is None:
+    if (member := next((m for m in (*room.members, *room.retired_members) if m.member_id == normalized), None)) is None:
         raise DiscussionValidationError(f"unknown Discussion member '{normalized}'")
     return member
 
@@ -772,7 +778,7 @@ def reconstruct_task_plan(
         raise DiscussionReconstructionError("task identity does not match its room thread")
     profile, target_member_id = payload.get("target_profile"), payload.get("target_member_id")
     member = next((
-        m for m in room.members
+        m for m in (*room.members, *room.retired_members)
         if m.profile == profile and (target_member_id is None or m.member_id == target_member_id)), None)
     if member is None or _member_digest(member) != match.group("member"):
         raise DiscussionReconstructionError("task target member does not match turn_id")
@@ -900,7 +906,7 @@ def plan_publication(
     validated = _validated_events(events, room=room)
     for failed, message in (
         (task.identity.room_id != room.room_id, "task belongs to a different room"),
-        (task.member not in room.members, "task member is not in the frozen roster"),
+        (task.member not in (*room.members, *room.retired_members), "task member is not in the historical roster"),
         (status not in _TERMINAL_EFFECTS, "invalid terminal publication status")):
         if failed:
             raise DiscussionValidationError(message)
