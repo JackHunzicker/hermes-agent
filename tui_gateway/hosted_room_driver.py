@@ -256,7 +256,9 @@ class HostedRoomRuntime:
                 "last_error": self._last_error, "cycles": self._cycles}
 
     # ------------------------------------------------------------------ public ops
-    def cancel(self, identity: state.TaskIdentity, *, cancel_id: str) -> dict[str, Any]:
+    def cancel(self, identity: state.TaskIdentity, *, cancel_id: str,
+               expected_execution_generation: int | None = None,
+               expected_cancel_generation: int | None = None) -> dict[str, Any]:
         """Persist a stop intent, then commit cancellation after acknowledgement.
 
         The worker transitions tasks concurrently, so the status read is only a routing
@@ -264,6 +266,13 @@ class HostedRoomRuntime:
         """
         for _ in range(_CANCEL_ROUTE_RETRIES):
             before = state.get_task(self.db_path, identity)
+            if expected_execution_generation is not None:
+                if int(before["execution_generation"]) != expected_execution_generation:
+                    raise state.StaleTaskError("task_attempt_changed")
+                if (expected_cancel_generation is not None
+                    and int(before["cancel_generation"]) != expected_cancel_generation
+                    and before.get("cancel_id") != cancel_id):
+                    raise state.StaleTaskError("task_cancel_generation_changed")
             if before["status"] == "cancelled":
                 return before
             if before["status"] in state.TERMINAL_STATUSES:
@@ -273,7 +282,9 @@ class HostedRoomRuntime:
             try:
                 result = (state.cancel_task if direct else state.begin_task_cancel)(
                     self.db_path, identity, cancel_id=cancel_id,
-                    expected_cancel_generation=before["cancel_generation"], clock=self.clock)
+                    expected_cancel_generation=before["cancel_generation"], clock=self.clock,
+                    **({"expected_execution_generation": expected_execution_generation}
+                       if expected_execution_generation is not None else {}))
             except (state.InvalidTaskTransitionError, state.StaleTaskError):
                 continue  # lost the race with the worker (settled or re-queued); re-route
             if not direct:

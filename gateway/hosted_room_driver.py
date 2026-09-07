@@ -1129,13 +1129,16 @@ def requeue_not_admitted_task(db_path: DbPath, attempt: TaskAttempt, *, clock: C
 
 
 def cancel_task(
-    db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any, expected_cancel_generation: int, clock: Clock
+    db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any, expected_cancel_generation: int, clock: Clock,
+    expected_execution_generation: int | None = None,
 ) -> dict[str, Any]:
     """Cancel a queued task before any external work was admitted."""
     cancel_id = _identifier(cancel_id, label="cancel_id")
     _cancel_generation(expected_cancel_generation)
     now = _timestamp(clock)
     def guard(row: sqlite3.Row) -> None:
+        if expected_execution_generation is not None and int(row["execution_generation"]) != expected_execution_generation:
+            raise StaleTaskError("task_attempt_changed")
         if row["status"] in TERMINAL_STATUSES:
             raise InvalidTaskTransitionError(f"cannot cancel task in state '{row['status']}'")
         if row["status"] not in {"queued", "deferred"}:
@@ -1148,13 +1151,16 @@ def cancel_task(
 
 
 def begin_task_cancel(
-    db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any, expected_cancel_generation: int, clock: Clock
+    db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any, expected_cancel_generation: int, clock: Clock,
+    expected_execution_generation: int | None = None,
 ) -> dict[str, Any]:
     """Persist a stop intent without claiming the remote run has stopped."""
     cancel_id = _identifier(cancel_id, label="cancel_id")
     _cancel_generation(expected_cancel_generation)
     now = _timestamp(clock)
     def guard(row: sqlite3.Row) -> None:
+        if expected_execution_generation is not None and int(row["execution_generation"]) != expected_execution_generation:
+            raise StaleTaskError("task_attempt_changed")
         if row["status"] in TERMINAL_STATUSES or row["status"] == "queued":
             raise InvalidTaskTransitionError(f"cannot request remote stop in state '{row['status']}'")
         _require_cancel_generation(row, expected_cancel_generation)
@@ -1357,9 +1363,12 @@ def _cancel_task_behind_stop_fence(
 ) -> sqlite3.Row | None:
     stop = conn.execute(
         """SELECT seq FROM hosted_room_events
-            WHERE room_id=? AND kind='room.stop_requested'
+            WHERE room_id=? AND (kind='room.stop_requested'
+                OR (kind='thread.stop_requested' AND json_extract(payload_json, '$.thread_id')=?)
+                OR (kind='task.stop_requested' AND json_extract(payload_json, '$.task_id')=?
+                    AND json_extract(payload_json, '$.execution_generation')=?))
             ORDER BY seq DESC LIMIT 1""",
-        (row["room_id"],),
+        (row["room_id"], row["thread_id"], row["task_id"], row["execution_generation"]),
     ).fetchone()
     if stop is None or int(row["source_event_seq"]) >= int(stop["seq"]):
         return None

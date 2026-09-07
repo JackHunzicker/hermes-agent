@@ -77,7 +77,10 @@ def _authority(room: Mapping[str, Any]) -> tuple[str, int]:
     return str(room["authority_gateway_id"]), int(room["authority_epoch"])
 
 
-class HostedRoomService(HostedRoomArtifactMixin):
+from tui_gateway.hosted_room_scoped_controls import HostedRoomScopedControlsMixin
+
+
+class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
     """Own the hosted Discussion policy and its transport-free worker."""
 
     def __init__(
@@ -836,6 +839,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
     def prepare_room(self, binding: HostedRoomBinding) -> None:
         with self._policy_lock:
             room = self._room(binding.room_id)
+            self._apply_scoped_stop_fences(binding.room_id)
             snapshot = self._policy_snapshot(room)  # sync() side effect feeds the publish below
             if self._publish_terminal_tasks(room):
                 room = self._room(binding.room_id)

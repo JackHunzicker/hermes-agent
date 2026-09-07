@@ -247,6 +247,9 @@ class HostedRoomPolicyCheckpoint:
                               (room_id,)).fetchone()
         if int(source["seq"]) <= int(cursor["stopped_through_seq"]):
             return None
+        from gateway.hosted_room_scoped_controls import thread_stop_seq
+        if int(source["seq"]) <= thread_stop_seq(conn, room_id, thread_id):
+            return None
         # Repeated explicit retries may leave many obsolete deferrals. Retain
         # the latest receipt per task and completion per status, not their history.
         rows = conn.execute("""WITH history AS (
@@ -285,10 +288,15 @@ class HostedRoomPolicyCheckpoint:
                SET stopped_through_seq=MAX(stopped_through_seq, ?) WHERE room_id=?""",
             (int(event["seq"]), str(event["room_id"])))
 
+    def _apply_thread_stop(self, conn, event, payload):
+        conn.execute("""UPDATE hosted_room_policy_threads SET completed=1
+            WHERE room_id=? AND thread_id=? AND latest_user_seq<?""",
+            (event["room_id"], payload["thread_id"], int(event["seq"])))
+
     _APPLY_BY_KIND: dict[str, Callable[..., None]] = {
         "message.user": _apply_user_message, "message.member": _apply_discussion_event,
         **dict.fromkeys(_TERMINAL_KINDS, _apply_discussion_event), "room.activity": _apply_room_activity,
-        "room.stop_requested": _apply_stop_requested}
+        "room.stop_requested": _apply_stop_requested, "thread.stop_requested": _apply_thread_stop}
 
     def _apply_event(self, conn: sqlite3.Connection, event: Mapping[str, Any]) -> None:
         handler = self._APPLY_BY_KIND.get(_text(event, "kind"))

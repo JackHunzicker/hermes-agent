@@ -5,6 +5,7 @@ Handlers are rebound onto server.py's globals at install (method_ctx.py); module
 helpers reach them through keyword defaults. ``_room_method`` is the shared envelope."""
 
 from .method_ctx import HandlerRegistry
+from .methods_groups_controls import METHODS as CONTROL_METHODS, FEATURES as CONTROL_FEATURES
 
 import contextlib
 import importlib
@@ -25,7 +26,7 @@ _METHODS = (
     "groups.replication.prepare", "groups.replication.enroll", "groups.replication.revoke",
     "groups.peer.invite", "groups.peer.revoke", "groups.peer.revoke_exact", "groups.peer.register",
     "groups.desktop.claim", "groups.desktop.presence", "groups.desktop.renew", "groups.desktop.complete",
-    "groups.control.invite", "groups.control.register", "groups.control.revoke")
+    "groups.control.invite", "groups.control.register", "groups.control.revoke") + CONTROL_METHODS
 LONG_HANDLERS = frozenset(_METHODS)
 
 _service_lock = threading.Lock()
@@ -230,7 +231,7 @@ def _room_method(
 
 
 @method("groups.capabilities")
-def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
+def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS, _control_features=CONTROL_FEATURES) -> dict:
     """Describe the hosted-room protocol implemented by this gateway."""
     from gateway.hosted_rooms import MAX_LOG_LIMIT, PROTOCOL_VERSION, local_authority_gateway_id
     service = get_hosted_room_service()
@@ -261,7 +262,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity", "peer_route_grant_fingerprint",
             "peer_grant_renewal", "local_membership_revision", "historical_member_identity", "rename_revision",
             "local_thread_member_sessions",
-            ] + (["authenticated_replication", "replica_retirement"] if room_link.get("enabled") else []),
+            ] + list(_control_features) + (["authenticated_replication", "replica_retirement"] if room_link.get("enabled") else []),
         "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
 
 
@@ -653,6 +654,8 @@ def _(rid, params: dict) -> dict:
 
 def register(server) -> None:
     _registry.install(server)
+    from tui_gateway.methods_groups_controls import register as register_controls
+    register_controls(server)
 
 def _revoke_peer_room_control(room_id: str, member_id: str) -> int:
     from gateway.hosted_room_control_client import revoke_stored_peer_control

@@ -74,7 +74,10 @@ _GATEWAY_EVENT_FIELDS = {
     "room.activity": (
         frozenset({"status", "reason_code", "thread_id", "discussion_event_id"}),
         ("reason_code", "thread_id", "discussion_event_id")),
-    "room.stop_requested": (frozenset({"cancel_id"}), ("cancel_id",))}
+    "room.stop_requested": (frozenset({"cancel_id"}), ("cancel_id",)),
+    "thread.stop_requested": (frozenset({"cancel_id", "thread_id"}), ("cancel_id", "thread_id")),
+    "task.stop_requested": (frozenset({"cancel_id", "thread_id", "task_id", "execution_generation", "cancel_generation"}),
+                            ("cancel_id", "thread_id", "task_id"))}
 _EPOCH_STAMPED_KINDS = _TERMINAL_EVENT_KINDS | {"message.member", *_GATEWAY_EVENT_FIELDS}
 
 
@@ -673,6 +676,11 @@ def _make_task_plan(
 def _pending_discussion(validated: Sequence[_ValidatedEvent]) -> _ValidatedEvent | None:
     """Oldest latest-per-thread user message not stopped and not yet completed."""
     stopped_through_seq = max((event.seq for event in validated if event.kind == "room.stop_requested"), default=0)
+    thread_stops = {}
+    for event in validated:
+        if event.kind == "thread.stop_requested":
+            thread_id = str(event.payload["thread_id"])
+            thread_stops[thread_id] = max(thread_stops.get(thread_id, 0), event.seq)
     committed_through = {
         str(event.payload["discussion_event_id"]): event.seq for event in validated
         if event.kind == "turn.settled" and event.payload.get("message_event_id") is not None}
@@ -686,7 +694,8 @@ def _pending_discussion(validated: Sequence[_ValidatedEvent]) -> _ValidatedEvent
         str(event.payload["thread_id"]): event for event in validated if event.kind == "message.user"}
     return next((
         event for event in sorted(latest_by_thread.values(), key=lambda item: item.seq)
-        if event.seq > stopped_through_seq and event.event_id not in completed_discussion_ids), None)
+        if event.seq > max(stopped_through_seq, thread_stops.get(str(event.payload["thread_id"]), 0))
+        and event.event_id not in completed_discussion_ids), None)
 
 
 def _thread_messages(
