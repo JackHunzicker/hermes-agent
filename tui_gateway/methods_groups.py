@@ -472,6 +472,7 @@ def _(rid, params: dict, service) -> dict:
         return disband_with_state()
     if existing.get("disbanded_at") is not None:
         return disband_with_state(existing)
+    service.begin_room_disband(room_id)
     service.stop_room(
         room_id, cancel_id=str(params.get("cancel_id") or "room-disbanded"),
         require_acknowledged=True)

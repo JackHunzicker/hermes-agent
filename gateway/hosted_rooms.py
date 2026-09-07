@@ -1142,6 +1142,8 @@ def append_event(
             conn, """SELECT next_seq, event_bytes, authority_gateway_id, authority_epoch
                 FROM hosted_rooms WHERE room_id=? AND disbanded_at IS NULL""", (room_id,), room_id)
         _require_authority(room, authority_gateway_id, authority_epoch, "stale hosted room authority")
+        if kind == "message.user":
+            route_schema.require_room_work_open(conn, room_id, error=HostedRoomError)
         seq = int(room["next_seq"])
         event_bytes = _insert_event(
             conn, room, room_id, seq, event_id, kind, actor_json, authority_epoch, payload_json, now,

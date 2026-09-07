@@ -261,6 +261,12 @@ def update_room_link_status(
                 != expected_grant_sha256
             ):
                 return False
+        # Observing/cancelling accepted work remains valid during close. Its
+        # health callback must not fail on the immutable route-update trigger.
+        if conn.execute(
+            "SELECT 1 FROM hosted_room_disband_fences WHERE room_id=?", (room_id,),
+        ).fetchone() is not None:
+            return False
         cursor = conn.execute(
             """UPDATE hosted_room_links SET status=?, updated_at=?
                  WHERE room_id=? AND member_id=?""",
