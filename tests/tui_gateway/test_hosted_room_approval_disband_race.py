@@ -146,7 +146,7 @@ def test_disband_cleanup_preserves_an_inflight_success_receipt(tmp_path, respons
         clock=owner.runtime.clock,
     )
     task = driver.get_task(db, task["identity"])
-    session = owner.runtime._resolve_or_create(rpc, "ops", binding.room_id)
+    session = owner.runtime._resolve_or_create(rpc, "ops", binding.room_id, task=task)
     owner.runtime._report_pending_action(
         binding,
         task,

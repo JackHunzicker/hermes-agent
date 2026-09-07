@@ -557,7 +557,7 @@ def binary_server():
                 base_url=f"http://127.0.0.1:{server.server_port}",
                 api_key="",
                 target_profile="reviewer",
-                timeout_seconds=0.2,
+                timeout_seconds=5,
             ),
         )
     finally:
@@ -612,8 +612,8 @@ def test_named_artifact_read_preserves_byte_and_whole_response_limits(
         else b"x" * 200
     )
     peer.drip = failure == "deadline"
-    if not peer.drip:
-        client.timeout_seconds = 5
+    if peer.drip:
+        client.timeout_seconds = 0.2
     started = time.monotonic()
     with pytest.raises(http.PeerRunsHTTPError, match=error) as caught:
         client.read_artifact(

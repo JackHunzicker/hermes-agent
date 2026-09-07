@@ -1233,15 +1233,17 @@ def test_attachment_manifest_never_follows_redirect_or_forwards_grant(
         redirected_requests = []
 
         def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             if self.path == "/sink":
                 type(self).redirected_requests.append(
-                    (self.headers.get("Authorization"), self.rfile.read())
+                    (self.headers.get("Authorization"), body)
                 )
                 self.send_response(200)
                 self.end_headers()
                 return
             self.send_response(redirect_status)
             self.send_header("Location", "/sink")
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
         def log_message(self, *args):
@@ -1267,6 +1269,7 @@ def test_attachment_manifest_never_follows_redirect_or_forwards_grant(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize("redirect_status", [301, 302, 303, 307, 308])
@@ -1277,15 +1280,17 @@ def test_attachment_upload_never_follows_redirect_or_forwards_grant(
         redirected_requests = []
 
         def do_PUT(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             if self.path == "/sink":
                 type(self).redirected_requests.append(
-                    (self.headers.get("Authorization"), self.rfile.read())
+                    (self.headers.get("Authorization"), body)
                 )
                 self.send_response(200)
                 self.end_headers()
                 return
             self.send_response(redirect_status)
             self.send_header("Location", "/sink")
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
         def log_message(self, *args):
@@ -1309,6 +1314,7 @@ def test_attachment_upload_never_follows_redirect_or_forwards_grant(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_attachment_network_errors_do_not_expose_local_paths(monkeypatch):

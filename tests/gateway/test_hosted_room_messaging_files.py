@@ -62,8 +62,10 @@ class NativeAdapter:
     @mark_native_document_guard
     async def send_document(self, *, chat_id, file_path, file_name=None, **kwargs):
         path = Path(file_path)
-        assert path.stat().st_mode & 0o777 == 0o600
-        assert path.parent.stat().st_mode & 0o777 == 0o700
+        # Keep native byte/destination coverage on Windows, which has no POSIX mode.
+        if os.name == "posix":
+            assert path.stat().st_mode & 0o777 == 0o600
+            assert path.parent.stat().st_mode & 0o777 == 0o700
         self.documents.append((chat_id, path.read_bytes(), file_name, path, kwargs))
         self.started.set()
         if self.release is not None:
