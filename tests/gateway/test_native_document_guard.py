@@ -121,14 +121,21 @@ async def test_installed_override_native_success_is_preserved(native):
 async def test_installed_override_exception_cannot_report_text_as_delivery(native):
     native.fail = True
     with require_native_document():
-        with pytest.raises(NativeDocumentFallback):
-            await send(native)
+        if native.platform == "discord":
+            assert (await send(native)).success is False
+        else:
+            with pytest.raises(NativeDocumentFallback):
+                await send(native)
     native.adapter.send.assert_not_awaited()
     assert native.upload.await_count == 1
-    # Existing generic file paths retain their historical text fallback.
+    # Discord's canonical media owner now fails closed even outside strict mode.
     result = await send(native)
-    assert result.success and result.message_id == "notice"
-    native.adapter.send.assert_awaited_once()
+    if native.platform == "discord":
+        assert result.success is False
+        native.adapter.send.assert_not_awaited()
+    else:
+        assert result.success and result.message_id == "notice"
+        native.adapter.send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -138,8 +145,11 @@ async def test_concurrent_ordinary_send_does_not_inherit_strict_context(native):
 
     async def strict():
         with require_native_document():
-            with pytest.raises(NativeDocumentFallback):
-                await send(native)
+            if native.platform == "discord":
+                assert (await send(native)).success is False
+            else:
+                with pytest.raises(NativeDocumentFallback):
+                    await send(native)
 
     pending = asyncio.create_task(strict())
     await native.entered.wait()

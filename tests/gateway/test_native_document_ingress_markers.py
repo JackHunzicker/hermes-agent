@@ -54,12 +54,20 @@ async def test_super_fallback_is_blocked_only_for_native_delivery(
     adapter.send = AsyncMock(return_value=notice)
 
     with require_native_document():
-        with pytest.raises(NativeDocumentFallback):
-            await adapter.send_document("D1", str(path), caption="Brief")
+        if platform == "discord":
+            assert (await adapter.send_document("D1", str(path), caption="Brief")).success is False
+        else:
+            with pytest.raises(NativeDocumentFallback):
+                await adapter.send_document("D1", str(path), caption="Brief")
     adapter.send.assert_not_awaited()
 
-    assert await adapter.send_document("D1", str(path), caption="Brief") is notice
-    adapter.send.assert_awaited_once()
+    result = await adapter.send_document("D1", str(path), caption="Brief")
+    if platform == "discord":
+        assert result.success is False
+        adapter.send.assert_not_awaited()
+    else:
+        assert result is notice
+        adapter.send.assert_awaited_once()
 
 
 @pytest.mark.asyncio

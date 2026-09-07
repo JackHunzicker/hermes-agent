@@ -709,6 +709,13 @@ class TelegramDeliveryMixin:
                             _send_attempt + 1, wait, safe_send_error)
                         await _adapter.asyncio.sleep(wait)
                         continue
+                    # Exhausted short flood waits are definite refusals too; the
+                    # delivery ledger must own the next wait rather than replay now.
+                    _adapter.logger.warning(
+                        "[%s] Telegram flood control on send persisted across %d attempts; failing "
+                        "closed so the delivery ledger owns the wait: %s",
+                        self.name, _send_attempt + 1, safe_send_error)
+                    return _adapter._flood_cap_result(wait)
                 raise
 
     async def _retrigger_typing(self, chat_id: str, metadata: Optional[Dict[str, Any]]) -> None:
@@ -933,6 +940,11 @@ class TelegramDeliveryMixin:
                 except Exception as retry_err:
                     safe_retry_error = _adapter._redact_telegram_error_text(retry_err)
                     _adapter.logger.error("[%s] Edit retry failed after flood wait: %s", self.name, safe_retry_error)
+                    retry_wait = getattr(retry_err, "retry_after", None)
+                    if retry_wait is not None or "retry after" in str(retry_err).lower():
+                        # Preserve the second refusal's delay for ledger scheduling.
+                        return _adapter._flood_cap_result(
+                            float(retry_wait) if retry_wait is not None else wait)
                     return _adapter.SendResult(success=False, error=safe_retry_error)
             safe_error = _adapter._redact_telegram_error_text(e)
             # Transient network errors must not permanently disable progress-message editing.

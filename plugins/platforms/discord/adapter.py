@@ -985,6 +985,7 @@ def _read_discord_prompt_timeout() -> int:
 from .adapter_lifecycle import DiscordLifecycleMixin
 from .adapter_recovery import DiscordRecoveryMixin
 from .adapter_commands import DiscordCommandsMixin
+from .adapter_media import DiscordMediaMixin
 from .adapter_delivery import DiscordDeliveryMixin
 from .adapter_voice import DiscordVoiceMixin
 from .adapter_routing import DiscordRoutingMixin
@@ -993,7 +994,7 @@ from .adapter_inbound import DiscordInboundMixin
 
 
 class DiscordAdapter(
-    DiscordLifecycleMixin, DiscordRecoveryMixin, DiscordCommandsMixin, DiscordDeliveryMixin, DiscordVoiceMixin, DiscordRoutingMixin, DiscordPromptsMixin, DiscordInboundMixin,
+    DiscordLifecycleMixin, DiscordRecoveryMixin, DiscordCommandsMixin, DiscordMediaMixin, DiscordDeliveryMixin, DiscordVoiceMixin, DiscordRoutingMixin, DiscordPromptsMixin, DiscordInboundMixin,
     BasePlatformAdapter,
 ):
     """Discord bot adapter: guild/DM messages, threads, slash commands, button approvals, reactions."""
