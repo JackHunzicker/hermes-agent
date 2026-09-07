@@ -472,10 +472,10 @@ class FilesMenu:
             actions.append((text("newer"), ("newer", None)))
         if page["has_more"]:
             actions.append((text("older"), ("older", None)))
-        actions.extend([
-            (text("search"), ("search", None)), (text("back"), ("room", None))
-        ])
-        if len(actions) < 12:
+        if page["items"] or page["has_more"] or self.query:
+            actions.append((text("search"), ("search", None)))
+        actions.append((text("back"), ("room", None)))
+        if len(actions) < 12 and (self.position > 0 or self.query):
             actions.append((text("show_latest"), ("files", None)))
         empty = (
             text("partial")
@@ -486,7 +486,7 @@ class FilesMenu:
         )
         title = text("title", name=label(self.room.get("name")))
         if notice or not page["items"]:
-            title += "\n" + (notice or empty)
+            title += "\n\n" + (notice or empty)
         rendered = self.page(title, actions)
         return ChoicePage(rendered.title, [
             {**choice, "full_width": index < len(page["items"])}
@@ -585,13 +585,13 @@ class FilesMenu:
                      command=f"`{self.command} {self.reference} file {code}`"),
             ])
         if not page["items"]:
-            lines.append(
+            lines.extend(["",
                 text("partial")
                 if page["has_more"]
                 else text("no_match")
                 if self.query
                 else text("empty")
-            )
+            ])
         lines.append("")
         if page["has_more"]:
             lines.append(
@@ -603,9 +603,10 @@ class FilesMenu:
                 text("command_hint", caption=text("newer"),
                      command=f"`{self.command} {self.reference} files --newer {self.handle}`")
             )
-        lines.append(text("command_hint", caption=text("search"),
-                          command=f"`{self.command} {self.reference} files <text>`"))
-        lines.append(text("command_hint", caption=text("back"),
+        if page["items"] or page["has_more"] or self.query:
+            lines.append(text("command_hint", caption=text("search"),
+                              command=f"`{self.command} {self.reference} files <text>`"))
+        lines.append(text("command_hint", caption=text("view_group"),
                           command=f"`{self.command} {self.reference}`"))
         return "\n".join(lines)
 

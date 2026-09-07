@@ -310,7 +310,7 @@ async def test_plain_files_does_not_inherit_telegram_icons(consumer):
     await menu.files_page()
     plain = menu.plain_files()
     assert "📎" not in plain and "🕘" not in plain and "🤖" not in plain
-    assert "/group 1 file " in plain and "/group 1 reply" in plain
+    assert "/group 1 file " in plain and "/group 1 reply" not in plain
 
 
 @pytest.mark.asyncio

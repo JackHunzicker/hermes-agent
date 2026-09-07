@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "그룹 채팅 보기"
     unsupported: "여기에서는 파일을 보낼 수 없습니다. Desktop의 파일에서 받으세요."
     unavailable: "이 그룹 채팅에서는 아직 파일을 찾아볼 수 없습니다."
     denied: "파일 접근 권한이 더 이상 없습니다. 그룹 채팅을 다시 여세요."

@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "グループチャットを見る"
     unsupported: "ここではファイルを送信できません。Desktop の「ファイル」から取得してください。"
     unavailable: "このグループチャットではまだファイルを閲覧できません。"
     denied: "ファイルへのアクセスは許可されなくなりました。グループチャットを開き直してください。"

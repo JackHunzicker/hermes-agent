@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "Bekyk groepklets"
     unsupported: "Lêeraflewering is nie hier beskikbaar nie. Kry die lêer onder Lêers op Desktop."
     unavailable: "Lêerblaai is nog nie vir hierdie groepklets beskikbaar nie."
     denied: "Toegang tot lêers word nie meer toegelaat nie. Maak die groepklets weer oop."

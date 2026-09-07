@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "查看群組聊天"
     unsupported: "此處無法傳送檔案。請在 Desktop 的「檔案」中取得。"
     unavailable: "此群組聊天尚不支援瀏覽檔案。"
     denied: "檔案存取已不再獲准。請重新開啟群組聊天。"

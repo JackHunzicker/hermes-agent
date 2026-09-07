@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "Gruppenchat ansehen"
     unsupported: "Dateien können hier nicht gesendet werden. Hole die Datei unter Dateien in Desktop."
     unavailable: "Die Dateiansicht ist für diesen Gruppenchat noch nicht verfügbar."
     denied: "Der Dateizugriff ist nicht mehr erlaubt. Öffne den Gruppenchat erneut."

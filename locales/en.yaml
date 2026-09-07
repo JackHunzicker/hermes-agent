@@ -31,6 +31,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "View Group Chat"
     unsupported: "Hermes can’t send files in this chat yet. Open Files in Hermes Desktop."
     unavailable: "File browsing isn't available for this Group Chat yet."
     denied: "You can no longer get this file here. Open the Group Chat again."

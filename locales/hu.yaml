@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "Csoportos csevegés megtekintése"
     unsupported: "Itt nem érhető el fájlküldés. A fájlt a Desktop Fájlok nézetében érheted el."
     unavailable: "Ebben a csoportos csevegésben még nem lehet fájlokat böngészni."
     denied: "A fájlhozzáférés már nem engedélyezett. Nyisd meg újra a csoportos csevegést."

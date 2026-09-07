@@ -40,7 +40,7 @@ async def test_french_native_and_plain_copy_keep_command_values(consumer, monkey
     plain = menu.plain_files()
     assert "Télécharger:" in plain
     assert "`/group 1 files <text>`" in plain
-    assert files.text("back") + ": `/group 1`" in plain
+    assert files.text("view_group") + ": `/group 1`" in plain
     assert "`/group 1 reply`" not in plain
 
 
@@ -66,6 +66,32 @@ async def test_same_minute_versions_have_distinct_native_and_plain_labels(consum
     assert plain.count("Download: ") == 2
     for choice, item in zip(page.choices, items):
         assert menu.actions[choice["value"]][1][0]["attachment_id"] == item["attachment_id"]
+
+
+@pytest.mark.asyncio
+async def test_empty_files_separate_notice_and_only_offer_useful_actions(consumer):
+    state, runner, _ = consumer
+    menu = files.FilesMenu(runner, event("/group 1 files"), state.backend, "/group")
+    await menu.bind("1")
+    page = await menu.files_page()
+    assert page.title.endswith("\n\n" + files.text("empty"))
+    assert list(menu.actions.values()) == [("room", None)]
+    plain = menu.plain_files()
+    assert "\n\n" + files.text("empty") + "\n\n" in plain
+    assert files.text("view_group") + ": `/group 1`" in plain
+    assert "files <text>" not in plain and "reply`" not in plain
+
+
+@pytest.mark.asyncio
+async def test_first_files_page_has_no_noop_refresh_but_search_can_reset(consumer):
+    menu = await menu_with_versions(consumer)
+    menu.render_files()
+    assert ("files", None) not in menu.actions.values()
+    menu.query = "missing filename"
+    await menu.files_page()
+    assert ("files", None) in menu.actions.values()
+    assert ("search", None) in menu.actions.values()
+    assert files.text("no_match") in menu.plain_files()
 
 
 @pytest.mark.parametrize("lang", i18n.SUPPORTED_LANGUAGES)
@@ -205,7 +231,7 @@ async def test_exact_timestamp_disambiguation_extends_existing_colliding_codes(c
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name,prefix", [("whatsapp", "/"), ("matrix", "!"), ("slack", "!")])
-async def test_text_file_blocks_use_correct_download_search_and_back_commands(
+async def test_text_file_blocks_use_correct_download_search_and_view_commands(
     consumer, monkeypatch, platform_name, prefix
 ):
     from types import MethodType
@@ -233,7 +259,7 @@ async def test_text_file_blocks_use_correct_download_search_and_back_commands(
         code = selection_digest(menu.room, item)[:8]
         assert command == f"Download: `{prefix}group 1 file {code}`"
     assert f"Search: `{prefix}group 1 files <text>`" in blocks[-1]
-    assert f"Back: `{prefix}group 1`" in blocks[-1]
+    assert f"View Group Chat: `{prefix}group 1`" in blocks[-1]
     assert "reply`" not in result
     assert not adapter.documents and not adapter.pages
     if prefix == "!":

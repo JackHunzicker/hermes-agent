@@ -25,6 +25,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "Féach ar an gcomhrá grúpa"
     unsupported: "Níl seoladh comhad ar fáil anseo. Faigh an comhad ó Chomhaid ar Desktop."
     unavailable: "Níl brabhsáil comhad ar fáil don chomhrá grúpa seo fós."
     denied: "Níl rochtain ar chomhaid údaraithe a thuilleadh. Oscail an comhrá grúpa arís."

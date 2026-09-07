@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "Ver a conversa de grupo"
     unsupported: "O envio de ficheiros não está disponível aqui. Obtenha o ficheiro em Ficheiros no Desktop."
     unavailable: "A consulta de ficheiros ainda não está disponível para esta conversa de grupo."
     denied: "O acesso aos ficheiros já não está autorizado. Abra novamente a conversa de grupo."

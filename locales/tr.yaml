@@ -21,6 +21,7 @@ approval:
 
 gateway:
   group_files:
+    view_group: "Grup sohbetini görüntüle"
     unsupported: "Burada dosya gönderimi kullanılamıyor. Dosyayı Desktop'taki Dosyalar'dan alın."
     unavailable: "Bu grup sohbetinde dosya tarama henüz kullanılamıyor."
     denied: "Dosya erişimine artık izin verilmiyor. Grup sohbetini yeniden açın."
