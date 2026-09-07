@@ -91,6 +91,20 @@ def participant_history(proof, args):
             _conn=conn, **{k: args[k] for k in ("after_seq", "limit", "snapshot_seq", "query") if k in args})
 
 
+def participant_upload(proof, args):
+    from gateway.hosted_room_artifacts import RoomArtifactOutbox, RoomArtifactScope, RoomArtifactError
+    from gateway.hosted_room_attachments import decode_content_base64, AttachmentError
+    try:
+        with participant_transaction(proof):
+            scope = RoomArtifactScope.from_mapping({k: v for k, v in proof.items() if k not in {"thread_id", "turn_id"}})
+        data = decode_content_base64(args["data_base64"])
+        artifact = RoomArtifactOutbox(rooms.default_db_path()).put_bytes(scope=scope, data=data,
+            source_name=args["name"], name=args["name"], write_guard=lambda conn: require_participant(conn, proof))
+    except (RoomArtifactError, AttachmentError) as exc:
+        raise rooms.HostedRoomError(str(exc)) from exc
+    return {k: artifact[k] for k in ("artifact_id", "name", "size", "sha256")} | {"publication": "on_turn_completion"}
+
+
 def participant_send(proof, args):
     from gateway.hosted_room_discussion import MAX_USER_TEXT_BYTES
     from gateway.hosted_room_responder_policy import validate_mentions
@@ -133,6 +147,8 @@ def participant_send(proof, args):
             (room["room_id"], task["task_id"], task["execution_generation"])).fetchone()[0]
         if sent >= 16:
             raise rooms.HostedRoomError("Participant turn message limit reached; finish this turn")
+        from gateway.hosted_room_event_policy import require_input_capacity
+        require_input_capacity(conn, room["room_id"], "message.participant", payload)
         row = rooms._room_row(conn, rooms._SELECT_ROOM_WITH_BYTES, (room["room_id"],), room["room_id"])
         seq, timestamp = int(row["next_seq"]), time.time()
         size = rooms._insert_event(conn, row, room["room_id"], seq, event_id, "message.participant",

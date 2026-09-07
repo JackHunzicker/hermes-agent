@@ -12,12 +12,16 @@ from tui_gateway import server
 
 
 @pytest.fixture
-def participant(tmp_path, monkeypatch):
+def participant(tmp_path, monkeypatch, request):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     service = HostedRoomService(_server(), db_path=tmp_path / "state.db")
     service.local_profiles = lambda: ("default", "ops")
     room = service.create_room(room_id="room-tools", name="Tools", members=[
         {"member_id": p, "profile": p, "handle": p} for p in ("default", "ops")])
+    if getattr(request, "param", None) == "event_driven":
+        from gateway.hosted_room_responder_policy import DEFAULT_POLICY, update_policy
+        update_policy(service, room_id=room["room_id"], event_id="policy", expected_revision=room["revision"],
+            policy={**DEFAULT_POLICY, "mode": "event_driven"})
     source = service.send(room_id=room["room_id"], event_id="source",
                           payload={"text": "@ops inspect", "thread_id": "thread-tools"})
     task = driver.list_tasks(service.db_path, room_id=room["room_id"])[0]
@@ -32,7 +36,7 @@ def participant(tmp_path, monkeypatch):
         "execution_generation": attempt.execution_generation,
         "home_install_id": room["authority_gateway_id"], "target_install_id": room["authority_gateway_id"],
         "authority_gateway_id": room["authority_gateway_id"], "authority_epoch": room["authority_epoch"]}
-    session = {"source": "bot_room", "_hosted_room_task": scope}
+    session = {"source": "bot_room", "_hosted_room_task": scope, "_test_attempt": attempt}
     token = server._current_runtime_session_record.set(session)
     try:
         yield service, room, source, task, session
@@ -109,3 +113,16 @@ def test_participant_history_search_reads_current_projection_in_its_room(partici
     assert call(operation="search", query="original")["messages"] == []
     assert call(operation="history", room_id="other")["ok"] is False
     assert call(operation="history", all_threads="not-a-boolean")["ok"] is False
+
+
+@pytest.mark.parametrize("participant", ["event_driven"], indirect=True)
+def test_participant_reply_respects_the_same_pending_input_bound(participant):
+    service, room, _, _, _ = participant
+    for index in range(23):
+        service.send(room_id=room["room_id"], event_id=f"busy-{index}",
+            payload={"text": f"@ops queued {index}", "thread_id": "thread-tools"})
+    before = service._events(room["room_id"])
+    reply = call(operation="send", event_id="overflow", text="@default overflow")
+    assert reply["ok"] is False, reply
+    assert "queue is full" in reply["error"]
+    assert service._events(room["room_id"]) == before

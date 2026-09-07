@@ -260,6 +260,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS, _control_fe
         "protocol_version": PROTOCOL_VERSION, "driver": driver_ready,
         "persistent_process": bool(room_link.get("catalog", {}).get("persistent_process", False)),
         "authority_gateway_id": local_authority_gateway_id(), "room_link": room_link,
+        "participant_tools": {"core": True, "native": False, "peer": False},
         "features": [
             "attachment_ids", "attachment_metadata_catalog", "attachment_same_gateway_delivery",
             "authority_epoch", "coordinator_fencing", "room_identity", "monotonic_log",
@@ -267,6 +268,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS, _control_fe
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity", "peer_route_grant_fingerprint",
             "peer_grant_renewal", "local_membership_revision", "historical_member_identity", "rename_revision",
             "local_thread_member_sessions", "responder_policy_v1", "event_driven_continuation_v1", "thread_parent_references_v1",
+            "participant_tools_v1", "participant_messages_v1",
             ] + list(_control_features) + list(_history_features) + (["authenticated_replication", "replica_retirement"] if room_link.get("enabled") else []),
         "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
 
