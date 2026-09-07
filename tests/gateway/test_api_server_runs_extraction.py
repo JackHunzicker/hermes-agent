@@ -13,6 +13,7 @@ from gateway.platforms import api_server_room_controls
 from gateway.platforms import api_server_room_dispatch
 from gateway.platforms import api_server_room_grants
 from gateway.platforms import api_server_room_replicas
+from gateway.platforms import api_server_replica_retirement
 from gateway.platforms import api_server_runs
 
 
@@ -184,6 +185,7 @@ def test_roomlink_and_run_route_tuples_are_shard_owned():
         *api_server_room_attachments._http_routes(adapter),
         *api_server_room_artifacts._http_routes(adapter),
         *api_server_room_replicas.http_routes(adapter),
+        *api_server_replica_retirement.http_routes(adapter),
     ]
     def route_contract(routes):
         return [(method, path, handler.__module__) for method, path, handler in routes]

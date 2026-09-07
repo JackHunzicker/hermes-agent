@@ -830,7 +830,8 @@ def apply_pending_decision(
                 conn.commit()
                 raise MessagingApprovalTerminalError(str(exc)) from exc
         if (
-            conn.execute(
+            choice != "deny"
+            and conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
                 "AND name='hosted_room_disband_fences'"
             ).fetchone()

@@ -1195,6 +1195,8 @@ def append_event(
             conn, """SELECT next_seq, event_bytes, authority_gateway_id, authority_epoch
                 FROM hosted_rooms WHERE room_id=? AND disbanded_at IS NULL""", (room_id,), room_id)
         _require_authority(room, authority_gateway_id, authority_epoch, "stale hosted room authority")
+        if kind == "message.user":
+            route_schema.require_room_work_open(conn, room_id, error=HostedRoomError)
         seq = int(room["next_seq"])
         if expected_latest_seq is not None and seq - 1 != expected_latest_seq:
             raise EventCursorConflictError("room changed before event publication")
@@ -1354,6 +1356,8 @@ def disband_room(
         room = conn.execute("""SELECT authority_gateway_id, authority_epoch, next_seq, event_bytes, disbanded_at
                 FROM hosted_rooms WHERE room_id=?""", (room_id,)).fetchone()
         if (replay := _disband_replay(conn, room_id, room)) is not None:
+            from gateway.hosted_room_replica_retirement import reconcile_home_close_locked
+            reconcile_home_close_locked(conn, room_id)
             return replay
         _require_authority(room, expected_gateway_id, expected_epoch, "stale hosted room authority")
         disband_bytes = _insert_event(
@@ -1368,6 +1372,8 @@ def disband_room(
             (now, now, disband_bytes, room_id, expected_gateway_id, expected_epoch),
             RoomConflictError("hosted room disband lost its fence"))
         conn.execute(_INSERT_RETIRED, (room_id, now))
+        from gateway.hosted_room_replica_retirement import reconcile_home_close_locked
+        reconcile_home_close_locked(conn, room_id)
         event = _reload(
             conn, _SELECT_EVENT, (room_id, "system:room-disbanded"), "room disband event could not be reloaded")
         _prune_disbanded_rooms_locked(conn, now=now, max_gateway_event_bytes=MAX_GATEWAY_EVENT_BYTES)

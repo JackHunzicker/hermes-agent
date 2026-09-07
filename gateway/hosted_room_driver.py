@@ -18,6 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Literal, get_args
 
+from gateway.hosted_room_route_schema import require_room_work_open
 from gateway.hosted_rooms_common import (
     DbPath, bounded_int, canonical_json, compact_json, connect, fenced_update, identifier, table_columns, text,
     transaction)
@@ -553,7 +554,7 @@ def _transition(
     db_path: DbPath, identity: TaskIdentity, *, sql: str, set_params: tuple[Any, ...], fence_params: tuple[Any, ...],
     stale: str, now: float, lease: DriverLease | None = None, lease_first: bool = True,
     replay: Callable[[sqlite3.Row], dict[str, Any] | None] | None = None,
-    guard: Callable[[sqlite3.Row], None] | None = None) -> dict[str, Any]:
+    guard: Callable[[sqlite3.Row], None] | None = None, new_work: bool = False) -> dict[str, Any]:
     """Run one fenced task transition: load -> idempotent replay -> lease/fence guard -> UPDATE.
 
     ``sql`` binds ``(*set_params, room_id, task_id, *fence_params)`` and must hit exactly one row or ``stale``
@@ -571,6 +572,8 @@ def _transition(
             _require_active_lease(conn, lease, now=now)
         if guard is not None:
             guard(row)
+        if new_work:
+            require_room_work_open(conn, identity.room_id, error=RoomUnavailableError)
         fenced_update(conn, sql, params, StaleTaskError(stale))
         return _task_from_row(_load_task(conn, identity))
 
@@ -586,7 +589,8 @@ def _generation_transition(
             raise StaleTaskError(generation_stale)
     return _transition(
         db_path, identity, lease=lease, now=now, replay=replay, guard=guard, sql=_generation_update(set_clause, status),
-        set_params=set_params, fence_params=(execution_generation, cancel_generation), stale=stale)
+        set_params=set_params, fence_params=(execution_generation, cancel_generation), stale=stale,
+        new_work=name in {"requeue", "requeue_deferred"})
 
 
 def _run_fence_transition(
@@ -699,6 +703,7 @@ def admit_task(db_path: DbPath, identity: TaskIdentity, *, payload: Any, clock: 
             "SELECT * FROM hosted_room_driver_tasks WHERE room_id=? AND thread_id=? AND turn_id=?",
             (identity.room_id, identity.thread_id, identity.turn_id)).fetchone() is not None:
             raise TaskConflictError("thread_id and turn_id are already bound to a task")
+        require_room_work_open(conn, identity.room_id, error=RoomUnavailableError)
         conn.execute("""INSERT INTO hosted_room_driver_tasks (
                    room_id, task_id, thread_id, turn_id, source_event_seq, payload_json, payload_digest,
                    status, execution_generation, cancel_generation, created_at, updated_at
@@ -764,6 +769,7 @@ def start_task(
                 "task is not next in the hosted room event order"
             )
         execution_generation = int(row["execution_generation"]) + 1
+        require_room_work_open(conn, identity.room_id, error=RoomUnavailableError)
         updated = conn.execute(
             """UPDATE hosted_room_driver_tasks
                SET status='running', execution_generation=?,
@@ -1000,6 +1006,7 @@ def requeue_indeterminate_task(
         if stopped is not None:
             _record_retry_receipt(conn, retry_id=retry_id, row=row, now=now)
             return _task_from_row(stopped)
+        require_room_work_open(conn, identity.room_id, error=RoomUnavailableError)
         updated = conn.execute(
             """UPDATE hosted_room_driver_tasks
                SET status='queued', run_gateway_id=NULL,
@@ -1078,6 +1085,7 @@ def requeue_deferred_task(
         if stopped is not None:
             _record_retry_receipt(conn, retry_id=retry_id, row=row, now=now)
             return _task_from_row(stopped)
+        require_room_work_open(conn, identity.room_id, error=RoomUnavailableError)
         updated = conn.execute(
             """UPDATE hosted_room_driver_tasks
                SET status='queued', run_gateway_id=NULL,
@@ -1111,7 +1119,7 @@ def requeue_not_admitted_task(db_path: DbPath, attempt: TaskAttempt, *, clock: C
     return _run_fence_transition(
         db_path, attempt, guard_stale="not-admitted task attempt lost its fence",
         lease_generation=lambda value: int(value or 0), now=now, replay=replay, sql=_REQUEUE_RUNNING_SQL,
-        set_params=(now,), stale="not-admitted task changed during requeue")
+        set_params=(now,), stale="not-admitted task changed during requeue", new_work=True)
 
 
 def cancel_task(

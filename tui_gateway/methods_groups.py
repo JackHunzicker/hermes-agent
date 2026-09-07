@@ -22,6 +22,7 @@ _METHODS = (
     "groups.attachment.put", "groups.attachment.list", "groups.attachment.read",
     "groups.rename", "groups.log", "groups.disband", "groups.replica_state",
     "groups.stop", "groups.retry", "groups.approve",
+    "groups.replication.prepare", "groups.replication.enroll", "groups.replication.revoke",
     "groups.peer.invite", "groups.peer.revoke", "groups.peer.revoke_exact", "groups.peer.register",
     "groups.desktop.claim", "groups.desktop.presence", "groups.desktop.renew", "groups.desktop.complete",
     "groups.control.invite", "groups.control.register", "groups.control.revoke")
@@ -259,8 +260,44 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
             "desktop_compatibility_mailbox", "reciprocal_room_control", "reciprocal_room_control_setup",
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity", "peer_route_grant_fingerprint",
             "peer_grant_renewal",
-            ] + (["authenticated_replication"] if room_link.get("enabled") else []),
+            ] + (["authenticated_replication", "replica_retirement"] if room_link.get("enabled") else []),
         "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
+
+
+@_room_method("groups.replication.prepare", code=5127, room_code=4127, db=True)
+def _(rid, params: dict, db_path) -> dict:
+    from gateway import hosted_room_replica_retirement as retirement
+    from gateway.hosted_room_peer import gateway_room_grant_secret
+    from gateway.hosted_rooms import local_authority_gateway_id
+    if set(params) - {"room_id", "target_install_id", "endpoint", "enrollment_id", "replace_enrollment_id"}:
+        raise retirement.RetirementError("invalid retirement setup fields")
+    enrollment = retirement.prepare_home_enrollment(
+        db_path, room_id=params.get("room_id"), target_install_id=params.get("target_install_id"),
+        endpoint=params.get("endpoint"), local_gateway_id=local_authority_gateway_id(),
+        secret=gateway_room_grant_secret(), enrollment_id=params.get("enrollment_id"),
+        replace_enrollment_id=params.get("replace_enrollment_id"),
+    )
+    return _ok(rid, {"enrollment": enrollment})
+
+
+@_room_method("groups.replication.enroll", code=5127, room_code=4127, db=True)
+def _(rid, params: dict, db_path) -> dict:
+    from gateway import hosted_room_replica_retirement as retirement
+    from gateway.hosted_rooms import local_authority_gateway_id
+    if set(params) - {"enrollment", "expected_enrollment_id", "expected_state"}:
+        raise retirement.RetirementError("invalid retirement enrollment fields")
+    return _ok(rid, retirement.enroll_target(
+        db_path, enrollment=params.get("enrollment"), target_install_id=local_authority_gateway_id(),
+        expected_enrollment_id=params.get("expected_enrollment_id"), expected_state=params.get("expected_state", "active"),
+    ))
+
+
+@_room_method("groups.replication.revoke", code=5127, room_code=4127, db=True)
+def _(rid, params: dict, db_path) -> dict:
+    from gateway import hosted_room_replica_retirement as retirement
+    if set(params) != {"room_id", "enrollment_id"}:
+        raise retirement.RetirementError("invalid retirement revocation fields")
+    return _ok(rid, retirement.revoke_target_enrollment(db_path, **params))
 
 
 @_room_method("groups.peer.invite", code=4120, db=True)

@@ -835,8 +835,6 @@ class HostedRoomService(HostedRoomArtifactMixin):
 
     def prepare_room(self, binding: HostedRoomBinding) -> None:
         with self._policy_lock:
-            if self._room_is_disbanding(binding.room_id):
-                raise driver.RoomUnavailableError("hosted room is being disbanded")
             room = self._room(binding.room_id)
             snapshot = self._policy_snapshot(room)  # sync() side effect feeds the publish below
             if self._publish_terminal_tasks(room):
@@ -845,6 +843,8 @@ class HostedRoomService(HostedRoomArtifactMixin):
             self.policy_checkpoint.compact_completed(room_id=binding.room_id)
             driver.prune_published_terminal_tasks(
                 self.db_path, room_id=binding.room_id, clock=self.runtime.clock)
+            if hosted_room_link_records.room_link_retirement_started(self.db_path, room_id=binding.room_id):
+                return
             if next(iter(self._list_tasks(binding.room_id, _LIVE_STATUSES)), None) is not None:
                 return
             decision = discussion.plan_next_task(
@@ -977,6 +977,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
             None,
         )
         if task is None:
+            self._require_work_open(room_id)
             raise driver.InvalidTaskTransitionError(
                 "no retryable room task matches task_id"
             )
@@ -991,6 +992,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
             raise driver.InvalidTaskTransitionError(
                 "no retryable room task matches task_id"
             )
+        self._require_work_open(room_id)
         return self.runtime.retry_indeterminate(task["identity"], retry_id=retry_id)
 
     def approve_room_task(
@@ -1013,7 +1015,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
         from gateway import hosted_room_messaging_approvals as approvals
 
         try:
-            room = self._owned_room(room_id)
+            room = self._owned_room(room_id, allow_disbanding=True)
         except (hosted_rooms.RoomNotFoundError, driver.RoomUnavailableError):
             approvals.clear_pending_approval(
                 self.db_path,
@@ -1081,6 +1083,9 @@ class HostedRoomService(HostedRoomArtifactMixin):
             )
         if choice not in {"once", "deny"}:
             raise RuntimeError("room approval choice must be once or deny")
+
+        if choice != "deny":
+            self._require_work_open(room_id)
 
         def apply():
             approve = getattr(client, "approve_receipt", None)
@@ -1418,7 +1423,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
     ) -> dict[str, Any]:
         """Append a user event whose actor was derived by trusted gateway code."""
 
-        room = self._owned_room(room_id)
+        room = self._owned_room(room_id, allow_disbanding=True)
         member_ids = tuple(
             str(member.get("member_id") or member.get("profile") or "")
             for member in room["members"]
@@ -1429,6 +1434,11 @@ class HostedRoomService(HostedRoomArtifactMixin):
             payload,
             member_ids=member_ids,
         )
+        if self._room_is_disbanding(room_id):
+            return hosted_rooms.append_event(
+                self.db_path, room_id=room_id, event_id=event_id, kind="message.user",
+                actor=dict(actor), payload=normalized,
+                authority_gateway_id=str(room["authority_gateway_id"]), authority_epoch=int(room["authority_epoch"]))
         transitioned_attachment_ids: tuple[str, ...] = ()
         if normalized.get("attachments"):
             normalized["attachments"], transitioned_attachment_ids = (
@@ -1904,6 +1914,11 @@ class HostedRoomService(HostedRoomArtifactMixin):
             return False
         return room.get("disbanded_at") is None
 
+
+    def _require_work_open(self, room_id: str) -> None:
+        from gateway.hosted_room_route_schema import require_room_work_open
+        with hosted_rooms._transaction(self.db_path, immediate=True) as conn:
+            require_room_work_open(conn, room_id, error=driver.RoomUnavailableError)
 
     def begin_room_disband(self, room_id: str) -> dict[str, Any]:
         """Persist the no-new-work fence before Stop and grant revocation."""

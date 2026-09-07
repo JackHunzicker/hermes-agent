@@ -782,6 +782,15 @@ class PeerRunsHTTPClient:
             body={"room_id": room_id, "room_name": room_name, "members": members, "page": page},
         )
 
+    def retire_replica(self, notice) -> Mapping[str, Any]:
+        """Use only the enrolled one-purpose capability at the installation endpoint."""
+        if self._profile_prefix or re.search(r"/p/[^/]+$", urllib.parse.urlsplit(self.base_url).path):
+            raise PeerRunsHTTPError("retirement requires the installation endpoint")
+        return self._request(
+            "/v1/group-replicas/retire", method="POST", body=notice.payload(),
+            headers={"Authorization": f"HermesReplicaRetirement {notice.value}"}, reject_redirects=True,
+        )
+
     def _scoped_post(self, path: str, grant: str, *, body: dict[str, Any]) -> dict[str, Any]:
         return self._request(
             path, method="POST", body=body, room_grant=self._require_room_grant(grant))

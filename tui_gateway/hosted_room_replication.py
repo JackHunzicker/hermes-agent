@@ -19,8 +19,9 @@ from typing import Any
 
 from gateway import hosted_room_links as links
 from gateway import hosted_rooms as rooms
-from gateway.hosted_room_peer import PROTOCOL_VERSION, _split_token
-from gateway.hosted_rooms_common import open_sqlite
+from gateway import hosted_room_replica_retirement as retirement
+from gateway.hosted_room_peer import PROTOCOL_VERSION, _split_token, gateway_room_grant_secret
+from gateway.hosted_rooms_common import open_sqlite, table_exists
 from gateway.status import _release_file_lock, _try_acquire_file_lock
 from tui_gateway.hosted_room_peer_http import PeerRunsHTTPClient, PeerRunsHTTPError
 
@@ -94,6 +95,14 @@ class _Route:
     generation: str = field(repr=False)
 
 
+@dataclass(frozen=True)
+class _RetirementWork:
+    enrollment_id: str
+
+
+_Work = tuple[str, str] | _RetirementWork
+
+
 class HostedRoomReplicationPublisher:
     """Gateway-owned asynchronous copy, deliberately independent of execution."""
 
@@ -104,9 +113,10 @@ class HostedRoomReplicationPublisher:
         self._condition = threading.Condition()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._routes: deque[tuple[str, str]] = deque()
-        self._inflight: set[tuple[str, str]] = set()
-        self._due: dict[tuple[str, str], float] = {}
+        self._routes: deque[_Work] = deque()
+        self._inflight: set[_Work] = set()
+        self._due: dict[_Work, float] = {}
+        self._retirement_delays: dict[_RetirementWork, float] = {}
         self._scan_at = 0.0
         self._error: str | None = None
         with self._transaction() as conn:
@@ -167,6 +177,7 @@ class HostedRoomReplicationPublisher:
 
     def _scan(self, now: float) -> None:
         with self._transaction() as conn:
+            has_retirement = table_exists(conn, retirement.HOME_TABLE)
             keys = [(row["room_id"], row["member_id"]) for row in conn.execute(
                 "SELECT room_id, member_id, grant FROM hosted_room_links ORDER BY room_id, member_id LIMIT ?",
                 (links.MAX_LINKS,),
@@ -185,13 +196,17 @@ class HostedRoomReplicationPublisher:
             conn.execute(f"""DELETE FROM {_TARGET_TABLE} WHERE NOT EXISTS (
                 SELECT 1 FROM {_TABLE} AS r WHERE r.room_id={_TARGET_TABLE}.room_id
                     AND r.target_install_id={_TARGET_TABLE}.target_install_id)""")
+        if has_retirement:
+            keys.extend(_RetirementWork(value) for value in retirement.pending_notice_ids(
+                self.db_path, local_gateway_id=self.local_id))
         current = set(keys)
         self._routes = deque([k for k in self._routes if k in current])
         self._routes.extend(k for k in keys if k not in self._routes)
         self._due = {k: due for k, due in self._due.items() if k in current}
+        self._retirement_delays = {k: delay for k, delay in self._retirement_delays.items() if k in current}
         self._scan_at = now + POLL_SECONDS
 
-    def _take(self) -> tuple[str, str] | None:
+    def _take(self) -> _Work | None:
         with self._condition:
             while not self._stop.is_set():
                 now = time.monotonic()
@@ -216,7 +231,7 @@ class HostedRoomReplicationPublisher:
                 key = self._take()
                 if key is None:
                     return
-                more = self._publish_one(key)
+                more = self._publish_retirement(key) if isinstance(key, _RetirementWork) else self._publish_one(key)
                 self._error = None
             except Exception:
                 # Never include transport exceptions, grant material, URLs or raw rows.
@@ -226,8 +241,40 @@ class HostedRoomReplicationPublisher:
                 if key is not None:
                     with self._condition:
                         self._inflight.discard(key)
-                        self._due[key] = time.monotonic() + (0 if more else POLL_SECONDS)
+                        delay = self._retirement_delays.get(key, POLL_SECONDS) if isinstance(key, _RetirementWork) else POLL_SECONDS
+                        self._due[key] = time.monotonic() + (0 if more else delay)
                         self._condition.notify_all()
+
+    def _publish_retirement(self, work: _RetirementWork) -> bool:
+        route = retirement.notice_route(self.db_path, enrollment_id=work.enrollment_id, local_gateway_id=self.local_id)
+        if route is None or self._stop.is_set():
+            return False
+        path = self.db_path.parent / "room_replication_locks" / (
+            _digest([route["room_id"], route["target_install_id"]]) + ".lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+", encoding="utf-8") as handle:
+            if not _try_acquire_file_lock(handle):
+                return False
+            try:
+                if retirement.notice_route(self.db_path, enrollment_id=work.enrollment_id, local_gateway_id=self.local_id) is None:
+                    return False
+                notice = retirement.materialize_notice(
+                    self.db_path, enrollment_id=work.enrollment_id, local_gateway_id=self.local_id,
+                    secret_loader=gateway_room_grant_secret,
+                )
+                if self._stop.is_set():
+                    return False
+                client = PeerRunsHTTPClient(base_url=notice.endpoint, api_key="", timeout_seconds=PAGE_TIMEOUT_SECONDS)
+                response = client.retire_replica(notice)
+                retirement.acknowledge_notice(self.db_path, notice=notice, response=response)
+                self._retirement_delays.pop(work, None)
+            except (retirement.RetirementError, PeerRunsHTTPError, OSError) as exc:
+                code = "retirement_key_unavailable" if isinstance(exc, retirement.RetirementKeyUnavailable) else "retirement_delivery_unconfirmed"
+                retirement.record_delivery_error(self.db_path, enrollment_id=work.enrollment_id, code=code)
+                self._retirement_delays[work] = min(300.0, self._retirement_delays.get(work, POLL_SECONDS / 2) * 2)
+            finally:
+                _release_file_lock(handle)
+        return False
 
     def _load_route(self, key: tuple[str, str]) -> _Route | None:
         with closing(open_sqlite(self.db_path, timeout=0.25)) as conn:
@@ -372,6 +419,26 @@ class HostedRoomReplicationPublisher:
         checkpoint = self._target_checkpoint(route)
         if checkpoint is None:
             return False
+        client = PeerRunsHTTPClient(
+            base_url=route.link.target_url, api_key="",
+            target_profile=route.link.target_profile if route.link.target_profile != "default" else None,
+            timeout_seconds=PAGE_TIMEOUT_SECONDS,
+        )
+        enrollment = retirement.current_home_enrollment(
+            self.db_path, room_id=key[0], target_install_id=route.link.catalog.installation_id,
+        )
+        if enrollment is not None:
+            if enrollment["state"] == "prepared":
+                try:
+                    proof = client.probe(grant=route.link.grant).get("retirement_enrollment")
+                except PeerRunsHTTPError as exc:
+                    return self._http_failure(route, checkpoint, exc)
+                if not retirement.confirm_home_enrollment(
+                    self.db_path, enrollment_id=enrollment["enrollment_id"], proof=proof,
+                ):
+                    return False
+            elif enrollment["state"] != "enrolled":
+                return False
         cursor, pending = checkpoint["acked_seq"], checkpoint["pending_end"]
         if pending is None and cursor >= route.room["latest_seq"] and checkpoint["status"] == "acked":
             return False
@@ -400,7 +467,6 @@ class HostedRoomReplicationPublisher:
             checkpoint.update(values)
         if self._stop.is_set():
             return False
-        client = PeerRunsHTTPClient(base_url=route.link.target_url, api_key="", timeout_seconds=PAGE_TIMEOUT_SECONDS)
         try:
             reply = client.replicate_page(
                 grant=route.link.grant, target_profile=route.link.target_profile,
@@ -439,8 +505,10 @@ class HostedRoomReplicationPublisher:
     def status(self, room_id: str | None = None) -> dict:
         import sqlite3
         error = self._error
+        retirements = []
         try:
             with closing(open_sqlite(self.db_path, timeout=0.25)) as conn:
+                has_retirement = table_exists(conn, retirement.HOME_TABLE)
                 rows = conn.execute(f"""SELECT r.room_id, member_id, r.target_install_id, target_profile,
                     authority_gateway_id, authority_epoch, r.acked_seq, r.source_latest_seq, r.status, r.updated_at,
                     t.selected_member_id, t.acked_seq AS target_acked_seq, t.status AS target_status,
@@ -454,10 +522,13 @@ class HostedRoomReplicationPublisher:
                     if row["status"] in _BLOCKED or row["status"].startswith("stopped"):
                         role = "blocked"
                     routes.append({**dict(row), "delivery_unconfirmed": row["status"] != "acked", "role": role})
+            if has_retirement:
+                retirements = retirement.home_status(self.db_path, room_id=room_id)
         except (OSError, sqlite3.Error):
-            routes, error = None, "publisher_status_unavailable"
+            routes, retirements, error = None, None, "publisher_status_unavailable"
         return {
             "running": any(t.is_alive() for t in self._threads), "stopping": self._stop.is_set(),
             "workers": sum(t.is_alive() for t in self._threads), "routes": routes,
+            "retirements": retirements,
             "error": error, "mode": "passive_async_copy", "source_loss_safe": False,
         }

@@ -397,6 +397,14 @@ def ingest_page(
     with _replica_transaction(db_path) as conn:
         if _authorize is not None:
             _authorize(conn)
+        from gateway.hosted_room_replica_retirement import copy_retired_locked, copy_scope_matches_locked
+        if copy_retired_locked(conn, room_id):
+            raise ReplicaHistoryExpiredError("Group Chat copy has been retired")
+        if not copy_scope_matches_locked(
+            conn, room_id=room_id, authority_gateway_id=authority["gateway_id"],
+            authority_epoch=authority["epoch"], members_json=members_json,
+        ):
+            raise ReplicaError("copy scope differs from owner enrollment")
         _prune_disbanded_replicas_locked(conn, now=now)
         if conn.execute(
             "SELECT 1 FROM hosted_rooms WHERE room_id=?", (room_id,)
@@ -625,6 +633,9 @@ def replica_state(db_path: Path | str, *, room_id: Any) -> dict[str, Any]:
         room_id, label="room_id", max_chars=MAX_ROOM_ID_CHARS
     )
     with _replica_transaction(db_path) as conn:
+        from gateway.hosted_room_replica_retirement import RETIREMENT_TABLE
+        from gateway.hosted_rooms_common import table_exists
+        retired = conn.execute(f"SELECT retired_at FROM {RETIREMENT_TABLE} WHERE room_id=?", (room_id,)).fetchone() if table_exists(conn, RETIREMENT_TABLE) else None
         row = conn.execute(
             """SELECT room_id, name, members_json, authority_gateway_id,
                       authority_epoch, last_seq, latest_seq, event_bytes,
@@ -665,7 +676,8 @@ def replica_state(db_path: Path | str, *, room_id: Any) -> dict[str, Any]:
             float(row["disbanded_at"]) if row["disbanded_at"] is not None else None
         ),
         "safety_status": (
-            "quarantined" if row["quarantine_reason"] is not None else "passive"
+            "quarantined" if row["quarantine_reason"] is not None else "retired" if retired is not None else "passive"
         ),
+        **({"copy_retired_at": float(retired[0])} if retired is not None else {}),
         "safety_reason": row["quarantine_reason"],
     }
