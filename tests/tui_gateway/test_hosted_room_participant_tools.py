@@ -134,7 +134,7 @@ def test_legacy_tool_handoff_chain_retains_round_bound_and_pending_delivery(part
     assert sent["event"]["seq"] in queued[0]["payload"]["input_context"]["event_seqs"]
 
 
-def test_participant_registry_send_is_attributed_idempotent_and_attempt_fenced(participant):
+def test_participant_registry_send_is_attributed_idempotent_and_attempt_fenced(participant, monkeypatch):
     service, room, source, task, session = participant
     definitions = get_tool_definitions(enabled_toolsets=["bot_room"], quiet_mode=True)
     assert any(t["function"]["name"] == "group_room" for t in definitions)
@@ -153,6 +153,14 @@ def test_participant_registry_send_is_attributed_idempotent_and_attempt_fenced(p
     assert event["payload"]["task_id"] == task["identity"].task_id
     assert event["payload"]["thread_id"] == "thread-tools"
     assert event["payload"]["parent_event_id"] == source["event_id"]
+    # Old raw-log clients must negotiate this kind, even outside their requested page.
+    monkeypatch.setattr(server, "get_hosted_room_service", lambda: service)
+    legacy = server._methods["groups.log"](1, {"room_id": room["room_id"], "limit": 1})
+    assert legacy["error"]["data"]["reason"] == "room_reader_upgrade_required"
+    assert legacy["error"]["data"]["required_features"] == ["participant_messages_v1"]
+    capable = server._methods["groups.log"](2, {"room_id": room["room_id"],
+        "supported_features": ["participant_messages_v1"]})
+    assert next(e for e in capable["result"]["events"] if e["event_id"] == event["event_id"]) == event
     assert call(**args)["event"]["event_id"] == event["event_id"]
     assert call(**{**args, "text": "changed"})["ok"] is False
     before = service._events(room["room_id"])
