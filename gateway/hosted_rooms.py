@@ -299,7 +299,9 @@ def _validate_actor(value: Any, *, kind: str) -> tuple[dict[str, str], str]:
     actor_kind = value.get("kind")
     if not isinstance(actor_kind, str) or actor_kind not in _EVENT_KINDS_BY_ACTOR:
         raise HostedRoomError("invalid actor.kind")
-    if kind not in _EVENT_KINDS_BY_ACTOR[actor_kind]:
+    from gateway.hosted_room_history import MUTATION_KINDS
+    if kind not in _EVENT_KINDS_BY_ACTOR[actor_kind] and not (
+            actor_kind in {"user", "member"} and kind in MUTATION_KINDS):
         raise HostedRoomError(f"actor kind '{actor_kind}' cannot append '{kind}'")
     actor = {"kind": actor_kind, "id": _actor_id(value.get("id"), "actor.id")}
     for field, max_chars in _OPTIONAL_ACTOR_FIELDS:
@@ -1391,13 +1393,18 @@ def disband_room(
 
 
 def read_events(
-    db_path: DbPath, *, room_id: Any, since_seq: Any = 0, limit: Any = 100, include_disbanded: bool = False
+    db_path: DbPath, *, room_id: Any, since_seq: Any = 0, limit: Any = 100, include_disbanded: bool = False,
+    supported_features: list[str] | None = None,
 ) -> dict[str, Any]:
     """Read a monotonic room-log delta after ``since_seq``."""
     room_id = _room_id(room_id)
     since_seq = _non_negative(since_seq, "since_seq")
     limit = _bounded_limit(limit, MAX_LOG_LIMIT)
     with _transaction(db_path) as conn:
+        conn.execute("BEGIN")
+        if supported_features is not None:
+            from gateway.hosted_room_capabilities import require_reader
+            require_reader(conn, room_id, supported_features)
         room = _room_row(
             conn, """SELECT next_seq, authority_gateway_id, authority_epoch FROM hosted_rooms
                 WHERE room_id=? AND (disbanded_at IS NULL OR ?)""", (room_id, int(include_disbanded)), room_id)

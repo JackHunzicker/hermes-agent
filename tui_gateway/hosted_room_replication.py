@@ -33,7 +33,7 @@ PAGE_LIMIT = 32
 WORKERS = 2
 _TABLE = "hosted_room_replication_publishers"
 _TARGET_TABLE = "hosted_room_replication_targets"
-_BLOCKED = {"needs_reauthorization", "replica_rejected", "invalid_ack", "source_gap"}
+_BLOCKED = {"needs_reauthorization", "replica_rejected", "invalid_ack", "source_gap", "room_reader_upgrade_required"}
 
 
 def _digest(value: Any) -> str:
@@ -483,9 +483,17 @@ class HostedRoomReplicationPublisher:
         if pending is None and cursor >= route.room["latest_seq"] and checkpoint["status"] == "acked":
             return False
         limit = PAGE_LIMIT if pending is None else max(1, pending - cursor)
-        page = rooms.read_events(
-            self.db_path, room_id=key[0], since_seq=cursor, limit=limit, include_disbanded=True,
-        )
+        from gateway.hosted_room_capabilities import RoomReaderUpgradeRequired
+        try:
+            # RoomLink v2 catalogs do not negotiate mutation/control projections.
+            page = rooms.read_events(
+                self.db_path, room_id=key[0], since_seq=cursor, limit=limit, include_disbanded=True,
+                supported_features=[],
+            )
+        except RoomReaderUpgradeRequired:
+            self._save(route, checkpoint, status="room_reader_upgrade_required",
+                       source_latest_seq=route.room["latest_seq"])
+            return False
         expected_authority = {"gateway_id": route.room["authority_gateway_id"], "epoch": 1}
         if page["authority"] != expected_authority:
             return False

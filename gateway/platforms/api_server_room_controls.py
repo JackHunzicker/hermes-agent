@@ -122,6 +122,7 @@ def _visible_events(room_id: str) -> list[dict[str, Any]]:
         room_id=room_id,
         since_seq=max(0, int(state.get("latest_seq") or 0) - 80),
         limit=80,
+        supported_features=[],
     )
     visible: list[dict[str, Any]] = []
     for event in delta.get("events", []):
@@ -206,9 +207,12 @@ async def _handle_room_control_read(
     *,
     _openai_error,
 ) -> "web.Response":
+    from gateway.hosted_room_capabilities import RoomReaderUpgradeRequired
     try:
         room, _member_id = _authorize(request)
         result = _summary(room, _backend())
+    except RoomReaderUpgradeRequired as exc:
+        return web.json_response({"error": {"message": str(exc), "code": exc.reason, "data": exc.data}}, status=409)
     except PermissionError:
         return _error_response(
             _openai_error,
