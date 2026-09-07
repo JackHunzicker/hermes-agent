@@ -601,6 +601,7 @@ def _make_task_plan(
     prompt: str,
     attachments: Sequence[Mapping[str, Any]] = (),
     input_context: Mapping[str, Any] | None = None,
+    session_scope: str | None = None,
 ) -> DiscussionTaskPlan:
     turn_id = f"d{discussion_event.seq}.r{round_index}.p{member_index}.s{seen_through_seq}.m{_member_digest(member)}"
     seed = compact_json(
@@ -634,6 +635,8 @@ def _make_task_plan(
         payload["attachments"] = [dict(attachment) for attachment in attachments]
     if input_context is not None:
         payload["input_context"] = dict(input_context)
+    if session_scope is not None:
+        payload["session_scope"] = session_scope
     return DiscussionTaskPlan(
         identity,
         payload,
@@ -745,7 +748,8 @@ def plan_next_task(
                 room=room, discussion_event=discussion, member=member, member_index=member_index,
                 round_index=round_index, seen_through_seq=seen_through_seq, prompt=prompt, attachments=attachments,
                 input_context=(validate_task_input({"watermark": watermark, "event_seqs": [event.seq for event in delta]})
-                               if freeze_input_context else None)))
+                               if freeze_input_context else None),
+                session_scope=("thread_member_v1" if freeze_input_context and _peer_id(member) is None else None)))
         if not any(int(event.payload["round_index"]) == round_index for event in member_messages):
             return decide("settled", "silent_round")
         if round_index == MAX_DISCUSSION_ROUNDS - 1:
@@ -818,7 +822,7 @@ def reconstruct_task_plan(
     reconstructed = _make_task_plan(
         room=room, discussion_event=discussion, member=member, member_index=int(match.group("position")),
         round_index=int(match.group("round")), seen_through_seq=seen_through_seq, prompt=prompt,
-        attachments=attachments, input_context=input_context)
+        attachments=attachments, input_context=input_context, session_scope=payload.get("session_scope"))
     reconstructed_payload = dict(reconstructed.payload)
     if frozen_recipient_ids is None:
         reconstructed_payload.pop("recipient_member_ids", None)

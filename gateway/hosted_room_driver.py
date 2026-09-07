@@ -39,7 +39,7 @@ TASK_STATUSES = frozenset(get_args(TaskStatus))
 TERMINAL_STATUSES = frozenset({"settled", "failed", "cancelled"})
 
 _TASK_PAYLOAD_REQUIRED_FIELDS = frozenset({"target_profile", "prompt", "source_event_seq"})
-_TASK_PAYLOAD_OPTIONAL_FIELDS = frozenset({"target_member_id", "attachments", "input_context", "recipient_member_ids"})
+_TASK_PAYLOAD_OPTIONAL_FIELDS = frozenset({"target_member_id", "attachments", "input_context", "recipient_member_ids", "session_scope"})
 _LEASE_COLUMNS = frozenset({
     "room_id", "gateway_id", "authority_epoch", "process_generation", "lease_generation", "expires_at", "acquired_at",
     "updated_at", "released_at"})
@@ -171,6 +171,10 @@ def _task_payload(value: Any) -> tuple[dict[str, Any], str, str]:
         "prompt": prompt,
         "source_event_seq": source_event_seq,
     }
+    if "session_scope" in value:
+        if value["session_scope"] != "thread_member_v1" or not value.get("target_member_id"):
+            raise DriverValidationError("unsupported room session scope")
+        normalized["session_scope"] = value["session_scope"]
     if "input_context" in value:
         from gateway.hosted_room_task_input import validate_task_input
 

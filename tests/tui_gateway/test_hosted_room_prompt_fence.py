@@ -27,7 +27,8 @@ def _stub_session(monkeypatch, *, title, profile_home=None):
     )
 
 
-def test_direct_prompt_to_hosted_group_session_is_rejected(tmp_path, monkeypatch):
+@pytest.mark.parametrize("suffix", ["", " | scope:" + "a" * 64])
+def test_direct_prompt_to_hosted_group_session_is_rejected(tmp_path, monkeypatch, suffix):
     home = tmp_path / ".hermes"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
@@ -41,7 +42,8 @@ def test_direct_prompt_to_hosted_group_session_is_rejected(tmp_path, monkeypatch
         ],
         authority_gateway_id=hosted_rooms.local_authority_gateway_id(),
     )
-    _stub_session(monkeypatch, title="Group: room-hosted")
+    _stub_session(monkeypatch, title="Group: room-hosted" + suffix)
+    monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *_: "normal admission reached")
 
     result = server._methods["prompt.submit"](
         "request-1", {"session_id": "session-1", "text": "continue"}

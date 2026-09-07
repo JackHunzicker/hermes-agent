@@ -854,6 +854,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
                 existing = driver.get_task_for_turn(self.db_path, decision.task.identity)
                 legacy_payload = dict(decision.task.payload)
                 legacy_payload.pop("input_context", None)
+                legacy_payload.pop("session_scope", None)
                 if existing is not None and "input_context" in existing["payload"]:
                     # A rebuilt cache may add older committed context. The slot
                     # already belongs to its original, frozen admission.

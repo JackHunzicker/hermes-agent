@@ -419,12 +419,12 @@ class HostedRoomRuntime:
         return False
 
     def _resume_exact(
-        self, transport: InternalSessionRPC, room_id: str, profile: str) -> str | None:
+        self, transport: InternalSessionRPC, room_id: str, profile: str, task: Mapping[str, Any]) -> str | None:
         """Resume the canonical room session and return its runtime id (None when absent).
 
         Probes must use the returned id, not the stored one: resume may hand back another.
         """
-        session = self._resolve_or_create(transport, profile, room_id, create=False)
+        session = self._resolve_or_create(transport, profile, room_id, task=task, create=False)
         return None if session is None else _session_id(session)
 
     def _open_session(
@@ -436,7 +436,7 @@ class HostedRoomRuntime:
         if transport is None or (peer_only and transport is self.rpc):
             return transport, None, None
         profile = task["payload"]["target_profile"]
-        return transport, profile, self._resume_exact(transport, binding.room_id, profile)
+        return transport, profile, self._resume_exact(transport, binding.room_id, profile, task)
 
     @staticmethod
     def _terminal_from_history(
@@ -766,7 +766,7 @@ class HostedRoomRuntime:
         try:
             transport = self._transport_for(binding, task)
             with self.turn_lock(profile):
-                session = self._resolve_or_create(transport, profile, binding.room_id)
+                session = self._resolve_or_create(transport, profile, binding.room_id, task=task)
                 session_id = _session_id(session)
                 prompt = str(task["payload"]["prompt"])
                 manifests = task["payload"].get("attachments") or []
@@ -1059,7 +1059,7 @@ class HostedRoomRuntime:
         self, binding: HostedRoomBinding, task: Mapping[str, Any]) -> _RecoveryInspection:
         profile, transport = task["payload"]["target_profile"], self._transport_for(binding, task)
         with self.turn_lock(profile):
-            session_id = self._resume_exact(transport, task["identity"].room_id, profile)
+            session_id = self._resume_exact(transport, task["identity"].room_id, profile, task)
             if session_id is None:
                 return _NO_INSPECTION
             return self._inspect_session(
@@ -1081,7 +1081,7 @@ class HostedRoomRuntime:
         profile = task["payload"]["target_profile"]
         with self.turn_lock(profile):
             session = self.rpc.resolve_exact(
-                profile=profile, title=room_session_title(task["identity"].room_id),
+                profile=profile, title=_task_session_title(task),
                 source=ROOM_SESSION_SOURCE)
             if session is None:
                 return _NO_INSPECTION
@@ -1166,11 +1166,11 @@ class HostedRoomRuntime:
         return self.rpc
 
     def _resolve_or_create(
-        self, transport: InternalSessionRPC, profile: str, room_id: str, *, create: bool = True
+        self, transport: InternalSessionRPC, profile: str, room_id: str, *, task: Mapping[str, Any], create: bool = True
     ) -> Mapping[str, Any] | None:
         """Resolve + resume the canonical room session; create it (or return None) when absent."""
         coords = {
-            "profile": profile, "title": room_session_title(room_id), "source": ROOM_SESSION_SOURCE}
+            "profile": profile, "title": _task_session_title(task), "source": ROOM_SESSION_SOURCE}
         session = transport.resolve_exact(**coords)
         if session is None:
             return transport.create(**coords) if create else None
@@ -1227,6 +1227,19 @@ class HostedRoomRuntime:
                 "attachment staging cleanup failed for "
                 f"session {session_id}: {cleanup_error}"
             )
+
+
+def _task_session_title(task: Mapping[str, Any]) -> str:
+    """Version new local scopes; never reinterpret an already-admitted legacy task."""
+    import hashlib
+    import json
+
+    title = room_session_title(task["identity"].room_id)
+    if task["payload"].get("session_scope") == "thread_member_v1":
+        coordinates = [task["identity"].thread_id, task["payload"]["target_member_id"]]
+        digest = hashlib.sha256(json.dumps(coordinates, ensure_ascii=True).encode()).hexdigest()
+        return f"{title} | scope:{digest}"
+    return title
 
 
 def room_session_title(room_id: str) -> str:

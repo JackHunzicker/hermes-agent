@@ -214,6 +214,10 @@ def _legacy_group_fence_error(rid, session, params):
     second renderer driver)."""
     title = str(session.get("title") or "")
     room_id = title.removeprefix("Group: ").strip() if title.startswith("Group: ") else ""
+    # New local sessions retain the authority-owned room prefix plus an opaque
+    # thread/member suffix. Direct clients must not bypass ownership via that suffix.
+    if " | scope:" in room_id:
+        room_id = room_id.split(" | scope:", 1)[0]
     if not room_id:
         return None
     try:
