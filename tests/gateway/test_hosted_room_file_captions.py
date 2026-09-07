@@ -251,7 +251,7 @@ async def test_loaded_page_rendering_is_batched_and_does_not_fetch(consumer, mon
 
 
 @pytest.mark.asyncio
-async def test_only_files_request_full_width_using_existing_telegram_layout(consumer):
+async def test_file_rows_are_full_width_and_navigation_stays_compact(consumer):
     state, _, _ = consumer
     batch(state, ["brief.md", "notes.md"], at=1_788_509_527, serial=0, producer="You")
     menu, page = await menu_for(consumer, Platform.TELEGRAM)
@@ -265,7 +265,11 @@ async def test_only_files_request_full_width_using_existing_telegram_layout(cons
 
     assert all(choice["full_width"] for choice in page.choices[:2])
     assert not any(choice["full_width"] for choice in page.choices[2:])
-    assert all(len(row) == 1 for row in markup(page).inline_keyboard)
+    keyboard = markup(page).inline_keyboard
+    assert all(len(row) == 1 for row in keyboard[:2])
+    navigation = page.choices[2:]
+    assert len(keyboard[2:]) == (len(navigation) + 1) // 2
+    assert [button.text for row in keyboard[2:] for button in row] == [choice["label"] for choice in navigation]
     room = await menu.room_page(detail="Unchanged room menu")
     assert not any(choice["full_width"] for choice in room.choices)
     assert len(markup(room).inline_keyboard[0]) == 2
