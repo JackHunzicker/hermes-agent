@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "ダウンロード"
+  group_compose:
+    send: "メッセージを送信"
+    title: "{group} へのメッセージ"
+    prompt: "メッセージを入力して送信してください。"
+    placeholder: "メッセージを入力"
+    unavailable: "入力欄を開けませんでした。グループチャットには送信されていません。"
+    cancel: "キャンセル"
+    view_group: "グループを表示"
+    cancelled: "メッセージをキャンセルしました。"
+    closed: "この入力欄は閉じているか利用できません。新しいメッセージを送るにはグループチャットを開いてください。"
+    unknown: "配信を確認できませんでした。再送する前にグループチャットを確認してください。"
+    text_only: "添付なしでテキストメッセージを1件送信してください（4096文字まで）。"
+
   group_presentation:
     action: "{label}: {command}"
     actions: "操作"

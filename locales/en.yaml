@@ -103,6 +103,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Download"
+  group_compose:
+    send: "Send message"
+    title: "Message to {group}"
+    prompt: "Type your message and send."
+    placeholder: "Write your message"
+    unavailable: "Couldn't open message input. No Group Chat message was sent."
+    cancel: "Cancel"
+    view_group: "View group"
+    cancelled: "Message cancelled."
+    closed: "This message prompt is closed or no longer available. Open the Group Chat to send a new message."
+    unknown: "Delivery could not be confirmed. Check the Group Chat before sending again."
+    text_only: "Send one text message (up to 4096 characters), without attachments."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Actions"

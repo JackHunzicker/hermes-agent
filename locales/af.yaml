@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Laai af"
+  group_compose:
+    send: "Stuur boodskap"
+    title: "Boodskap aan {group}"
+    prompt: "Tik jou boodskap en stuur dit."
+    placeholder: "Tik jou boodskap"
+    unavailable: "Kon nie die boodskapveld oopmaak nie. Geen boodskap is na die groepklets gestuur nie."
+    cancel: "Kanselleer"
+    view_group: "Bekyk groep"
+    cancelled: "Boodskap gekanselleer."
+    closed: "Hierdie boodskapveld is gesluit of nie meer beskikbaar nie. Maak die groepklets oop om 'n nuwe boodskap te stuur."
+    unknown: "Aflewering kon nie bevestig word nie. Gaan die groepklets na voordat jy weer stuur."
+    text_only: "Stuur een teksboodskap (tot 4096 karakters), sonder aanhegsels."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Aksies"

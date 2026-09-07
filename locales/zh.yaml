@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "下载"
+  group_compose:
+    send: "发送消息"
+    title: "发给 {group} 的消息"
+    prompt: "输入消息并发送。"
+    placeholder: "输入消息"
+    unavailable: "无法打开输入框。未向群聊发送任何消息。"
+    cancel: "取消"
+    view_group: "查看群聊"
+    cancelled: "消息已取消。"
+    closed: "此输入框已关闭或不可用。请打开群聊发送新消息。"
+    unknown: "无法确认是否送达。再次发送前请检查群聊。"
+    text_only: "请发送一条纯文本消息（最多4096个字符），不含附件。"
+
   group_presentation:
     action: "{label}: {command}"
     actions: "操作"

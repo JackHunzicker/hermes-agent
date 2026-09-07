@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Letöltés"
+  group_compose:
+    send: "Üzenet küldése"
+    title: "Üzenet a következőnek: {group}"
+    prompt: "Írd meg az üzenetet, és küldd el."
+    placeholder: "Írd meg az üzenetet"
+    unavailable: "Nem sikerült megnyitni a beviteli mezőt. Nem lett üzenet küldve a csoportnak."
+    cancel: "Mégse"
+    view_group: "Csoport megtekintése"
+    cancelled: "Üzenet törölve."
+    closed: "Ez a beviteli mező bezárult vagy már nem érhető el. Új üzenethez nyisd meg a csoportot."
+    unknown: "A kézbesítés nem igazolható. Újraküldés előtt ellenőrizd a csoportot."
+    text_only: "Egy szöveges üzenetet küldj (legfeljebb 4096 karakter), mellékletek nélkül."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Műveletek"

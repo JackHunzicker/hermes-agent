@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Descargar"
+  group_compose:
+    send: "Enviar mensaje"
+    title: "Mensaje para {group}"
+    prompt: "Escribe tu mensaje y envíalo."
+    placeholder: "Escribe tu mensaje"
+    unavailable: "No se pudo abrir la entrada. No se envió ningún mensaje al grupo."
+    cancel: "Cancelar"
+    view_group: "Ver grupo"
+    cancelled: "Mensaje cancelado."
+    closed: "Esta entrada está cerrada o ya no está disponible. Abre el grupo para enviar un mensaje nuevo."
+    unknown: "No se pudo confirmar la entrega. Revisa el grupo antes de volver a enviar."
+    text_only: "Envía un solo mensaje de texto (hasta 4096 caracteres), sin adjuntos."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Acciones"

@@ -97,6 +97,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Íoslódáil"
+  group_compose:
+    send: "Seol teachtaireacht"
+    title: "Teachtaireacht chuig {group}"
+    prompt: "Clóscríobh do theachtaireacht agus seol í."
+    placeholder: "Clóscríobh do theachtaireacht"
+    unavailable: "Níorbh fhéidir an bosca ionchuir a oscailt. Níor seoladh teachtaireacht chuig an ngrúpa."
+    cancel: "Cealaigh"
+    view_group: "Féach ar an ngrúpa"
+    cancelled: "Teachtaireacht curtha ar ceal."
+    closed: "Tá an bosca seo dúnta nó níl sé ar fáil a thuilleadh. Oscail an grúpa chun teachtaireacht nua a sheoladh."
+    unknown: "Níorbh fhéidir an seachadadh a dheimhniú. Seiceáil an grúpa sula seolann tú arís."
+    text_only: "Seol teachtaireacht téacs amháin (suas le 4096 carachtar), gan iatáin."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Gníomhartha"

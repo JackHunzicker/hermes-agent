@@ -98,6 +98,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "تنزيل"
+  group_compose:
+    send: "إرسال رسالة"
+    title: "رسالة إلى {group}"
+    prompt: "اكتب رسالتك وأرسلها."
+    placeholder: "اكتب رسالتك"
+    unavailable: "تعذر فتح حقل الكتابة. لم تُرسل أي رسالة إلى الدردشة الجماعية."
+    cancel: "إلغاء"
+    view_group: "عرض المجموعة"
+    cancelled: "تم إلغاء الرسالة."
+    closed: "حقل الرسالة مغلق أو لم يعد متاحًا. افتح الدردشة الجماعية لإرسال رسالة جديدة."
+    unknown: "تعذر تأكيد التسليم. تحقق من الدردشة الجماعية قبل الإرسال مجددًا."
+    text_only: "أرسل رسالة نصية واحدة (حتى 4096 حرفًا) دون مرفقات."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "إجراءات"

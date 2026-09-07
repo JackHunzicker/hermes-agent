@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Télécharger"
+  group_compose:
+    send: "Envoyer un message"
+    title: "Message à {group}"
+    prompt: "Écrivez votre message et envoyez-le."
+    placeholder: "Écrivez votre message"
+    unavailable: "Impossible d'ouvrir la saisie. Aucun message n'a été envoyé au groupe."
+    cancel: "Annuler"
+    view_group: "Voir le groupe"
+    cancelled: "Message annulé."
+    closed: "Cette saisie est fermée ou indisponible. Ouvrez le groupe pour envoyer un nouveau message."
+    unknown: "La livraison n'a pas pu être confirmée. Vérifiez le groupe avant de renvoyer."
+    text_only: "Envoyez un seul message texte (4096 caractères maximum), sans pièce jointe."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Actions"

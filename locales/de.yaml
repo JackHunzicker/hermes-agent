@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Herunterladen"
+  group_compose:
+    send: "Nachricht senden"
+    title: "Nachricht an {group}"
+    prompt: "Nachricht eingeben und senden."
+    placeholder: "Nachricht eingeben"
+    unavailable: "Nachrichteneingabe konnte nicht geöffnet werden. Es wurde keine Nachricht an den Gruppenchat gesendet."
+    cancel: "Abbrechen"
+    view_group: "Gruppe anzeigen"
+    cancelled: "Nachricht abgebrochen."
+    closed: "Diese Nachrichteneingabe ist geschlossen oder nicht mehr verfügbar. Öffne den Gruppenchat für eine neue Nachricht."
+    unknown: "Zustellung konnte nicht bestätigt werden. Prüfe den Gruppenchat vor erneutem Senden."
+    text_only: "Sende eine Textnachricht (bis zu 4096 Zeichen) ohne Anhänge."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Aktionen"

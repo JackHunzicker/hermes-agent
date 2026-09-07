@@ -93,6 +93,19 @@ gateway:
     file_label: "{name} · {producer} · {date} · {size}"
     file_metadata: "{producer} · {date} · {size}"
     download: "Scarica"
+  group_compose:
+    send: "Invia messaggio"
+    title: "Messaggio a {group}"
+    prompt: "Scrivi il messaggio e invialo."
+    placeholder: "Scrivi il messaggio"
+    unavailable: "Impossibile aprire il campo di scrittura. Nessun messaggio è stato inviato al gruppo."
+    cancel: "Annulla"
+    view_group: "Visualizza gruppo"
+    cancelled: "Messaggio annullato."
+    closed: "Questo campo è chiuso o non più disponibile. Apri il gruppo per inviare un nuovo messaggio."
+    unknown: "Consegna non confermata. Controlla il gruppo prima di inviare di nuovo."
+    text_only: "Invia un solo messaggio di testo (massimo 4096 caratteri), senza allegati."
+
   group_presentation:
     action: "{label}: {command}"
     actions: "Azioni"

@@ -160,6 +160,11 @@ class TelegramPromptsMixin:
 
     supports_choice_pages = True
     choice_pages_edit_in_place = True
+    supports_reply_input = True
+
+    async def send_reply_input(self, event, title, on_reply):
+        from .reply_input import send_reply_input
+        return await send_reply_input(self, event, title, on_reply)
 
     async def send_choice_picker(
         self,

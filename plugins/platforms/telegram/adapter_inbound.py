@@ -267,6 +267,9 @@ class TelegramInboundMixin:
         if not self._is_user_authorized_from_message(msg):
             self._log_blocked_user(msg)
             return
+        from .reply_input import dispatch_reply_input
+        if await dispatch_reply_input(self, msg, update.update_id):
+            return
         if not self._gate_or_observe(msg, update, _adapter.MessageType.TEXT):
             return
         await self._ensure_forum_commands(update.message)
@@ -283,6 +286,9 @@ class TelegramInboundMixin:
             return
         if not self._is_user_authorized_from_message(msg):
             self._log_blocked_user(msg)
+            return
+        from .reply_input import dispatch_reply_input
+        if await dispatch_reply_input(self, msg, update.update_id):
             return
         await self._ensure_forum_commands(msg)
         event = await self._build_triggered_event(msg, update, _adapter.MessageType.COMMAND)
@@ -302,6 +308,9 @@ class TelegramInboundMixin:
             return
         if not self._is_user_authorized_from_message(msg):
             self._log_blocked_user(msg)
+            return
+        from .reply_input import dispatch_reply_input
+        if await dispatch_reply_input(self, msg, update.update_id):
             return
         if not self._gate_or_observe(msg, update, _adapter.MessageType.LOCATION):
             return
@@ -586,6 +595,9 @@ class TelegramInboundMixin:
             return
         if not self._is_user_authorized_from_message(msg):
             self._log_blocked_user(msg, level=_adapter.logging.INFO, what="media from unauthorized user")
+            return
+        from .reply_input import dispatch_reply_input
+        if await dispatch_reply_input(self, msg, update.update_id):
             return
         if not self._should_process_message(msg):
             if self._should_observe_unmentioned_group_message(msg):

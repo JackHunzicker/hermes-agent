@@ -347,6 +347,12 @@ class FilesMenu:
         verified = await self.fresh_room()
         if fresh_choices != bot_choices or verified.get("members") != current.get("members"):
             raise PermissionError("denied")
+        if view == "room" and getattr(type(self.adapter), "supports_reply_input", False) is True:
+            from gateway.native_reply_input import text as compose_text
+            request = getattr(self, "compose_request", None)
+            if request is not None and request.pending and request.deadline > time.monotonic():
+                actions.insert(0, (compose_text("cancel"), ("cancel_compose", None)))
+            actions.insert(0, (compose_text("send"), ("compose", None)))
         return self.page(detail, actions, full_width=view == "bots")
 
     async def approval_page(self, position=0):
@@ -844,6 +850,17 @@ class FilesMenu:
             if not _rate(self.runner, self.source_key, "read"):
                 return text("rate")
             kind, data = action
+            if kind == "compose":
+                from gateway.hosted_room_messaging_compose import begin
+                return await begin(self)
+            if kind == "cancel_compose":
+                from gateway.native_reply_input import text as compose_text
+                request = getattr(self, "compose_request", None)
+                if request is not None:
+                    cancelled = await asyncio.to_thread(request.cancel)
+                    if not cancelled:
+                        return compose_text("closed")
+                return self.page(compose_text("cancelled"), [(compose_text("view_group"), ("room", None))])
             if kind == "permissions":
                 return await self.permission_page()
             if kind == "permission_action":
