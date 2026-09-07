@@ -48,6 +48,7 @@ async def begin(menu):
 
 
 async def submit(target, event, request):
+    from gateway.hosted_rooms import AuthorityConflictError
     from gateway.group_home_consent import _disclosure_stamp
     from gateway.group_chat_work import GroupChatMaintenanceError, run_group_command_work
     from gateway.hosted_room_messaging import (
@@ -94,8 +95,11 @@ async def submit(target, event, request):
                 _authorized(runner, event, target.source_key, target.adapter)
                 if stamp != _disclosure_stamp(runner, event):
                     raise PermissionError("denied")
-                result = send_to_room(target.backend, room, event, event.text)
-            except PermissionError:
+                result = send_to_room(
+                    target.backend, room, event, event.text,
+                    expected_authority=(target.room_key[1], target.room_key[2]),
+                )
+            except (PermissionError, AuthorityConflictError):
                 result = text("closed")
             except Exception:
                 result = text("unknown")

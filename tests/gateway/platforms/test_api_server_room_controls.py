@@ -31,8 +31,11 @@ class FakeService:
             "pending_actions": pending,
         }
 
-    def send_server_owned(self, *, room_id, event_id, payload, actor):
+    def send_server_owned(self, *, room_id, event_id, payload, actor, expected_authority=None):
         room = hosted_rooms.room_state(self.db_path, room_id=room_id)
+        authority = expected_authority
+        if authority is None:
+            authority = (str(room["authority_gateway_id"]), int(room["authority_epoch"]))
         return hosted_rooms.append_event(
             self.db_path,
             room_id=room_id,
@@ -40,8 +43,8 @@ class FakeService:
             kind="message.user",
             actor=actor,
             payload=payload,
-            authority_gateway_id=str(room["authority_gateway_id"]),
-            authority_epoch=int(room["authority_epoch"]),
+            authority_gateway_id=authority[0],
+            authority_epoch=authority[1],
         )
 
     def stop_room(self, room_id, *, cancel_id):
@@ -107,6 +110,44 @@ def test_api_server_registers_reciprocal_control_routes(control_api):
     assert ("GET", "/v1/room-controls/{room_id}") in routes
     assert ("POST", "/v1/room-controls/{room_id}") in routes
     assert ("DELETE", "/v1/room-controls/{room_id}") in routes
+
+
+@pytest.mark.asyncio
+async def test_control_send_carries_token_authority_through_backend_reread(control_api, monkeypatch):
+    from types import ModuleType
+    from tui_gateway.hosted_room_service import HostedRoomService
+
+    _adapter, app, fixture_service, headers = control_api
+    monkeypatch.setattr(hosted_rooms, "local_authority_gateway_id", lambda: HOME)
+    service = HostedRoomService(ModuleType("test_real_control_service"), db_path=fixture_service.db_path)
+    monkeypatch.setattr("tui_gateway.methods_groups.get_hosted_room_service", lambda: service)
+    original = service.send_server_owned
+    fences = []
+
+    def advance_before_service_read(**kwargs):
+        fences.append(kwargs.get("expected_authority"))
+        hosted_rooms.claim_authority(
+            service.db_path, room_id="room-1", expected_gateway_id=HOME,
+            expected_epoch=1, new_gateway_id=HOME, event_id="term-after-http-authorization",
+        )
+        return original(**kwargs)
+
+    monkeypatch.setattr(service, "send_server_owned", advance_before_service_read)
+    async with TestClient(TestServer(app)) as client:
+        denied = await client.post(
+            "/v1/room-controls/room-1", headers=headers,
+            json={"action": "send", "command_id": "late-remote-send", "text": "Cannot cross terms"},
+        )
+        assert denied.status == 400
+        assert (await denied.json())["error"]["message"] == "stale hosted room authority"
+        old_token = await client.post(
+            "/v1/room-controls/room-1", headers=headers,
+            json={"action": "send", "command_id": "old-token-retry", "text": "Still cannot cross terms"},
+        )
+        assert old_token.status == 401
+    assert fences == [(HOME, 1)]
+    assert not [event for event in hosted_rooms.read_events(service.db_path, room_id="room-1")["events"]
+                if event["kind"] == "message.user"]
 
 
 @pytest.mark.asyncio

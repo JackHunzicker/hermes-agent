@@ -1428,10 +1428,16 @@ class HostedRoomService(HostedRoomArtifactMixin):
         event_id: str,
         payload: Any,
         actor: Mapping[str, Any],
+        expected_authority: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         """Append a user event whose actor was derived by trusted gateway code."""
 
         room = self._owned_room(room_id, allow_disbanding=True)
+        # Caller-bound authority must reach append_event's transaction unchanged,
+        # even when this service reads a newer term before the append.
+        authority = expected_authority
+        if authority is None:
+            authority = (str(room["authority_gateway_id"]), int(room["authority_epoch"]))
         member_ids = tuple(
             str(member.get("member_id") or member.get("profile") or "")
             for member in room["members"]
@@ -1446,7 +1452,7 @@ class HostedRoomService(HostedRoomArtifactMixin):
             return hosted_rooms.append_event(
                 self.db_path, room_id=room_id, event_id=event_id, kind="message.user",
                 actor=dict(actor), payload=normalized,
-                authority_gateway_id=str(room["authority_gateway_id"]), authority_epoch=int(room["authority_epoch"]))
+                authority_gateway_id=authority[0], authority_epoch=authority[1])
         transitioned_attachment_ids: tuple[str, ...] = ()
         if normalized.get("attachments"):
             normalized["attachments"], transitioned_attachment_ids = (
@@ -1467,8 +1473,8 @@ class HostedRoomService(HostedRoomArtifactMixin):
                 kind="message.user",
                 actor=dict(actor),
                 payload=normalized,
-                authority_gateway_id=str(room["authority_gateway_id"]),
-                authority_epoch=int(room["authority_epoch"]),
+                authority_gateway_id=authority[0],
+                authority_epoch=authority[1],
             )
         except Exception:
             if transitioned_attachment_ids:
