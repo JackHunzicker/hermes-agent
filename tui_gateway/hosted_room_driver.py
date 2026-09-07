@@ -1256,7 +1256,14 @@ def _task_session_title(task: Mapping[str, Any]) -> str:
     if task["payload"].get("session_scope") == "thread_member_v1":
         coordinates = [task["identity"].thread_id, task["payload"]["target_member_id"]]
         digest = hashlib.sha256(json.dumps(coordinates, ensure_ascii=True).encode()).hexdigest()
-        return f"{title} | scope:{digest}"
+        scoped_title = f"{title} | scope:{digest}"
+        from hermes_state import SessionDB
+        if len(scoped_title) <= SessionDB.MAX_TITLE_LENGTH:
+            # Keep already-persisted short v1 bindings addressable.
+            return scoped_title
+        coordinates.insert(0, task["identity"].room_id)
+        digest = hashlib.sha256(json.dumps(coordinates, ensure_ascii=True).encode()).hexdigest()
+        return f"Group: scope-v1:{digest}"
     return title
 
 

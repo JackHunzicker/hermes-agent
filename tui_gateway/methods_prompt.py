@@ -212,7 +212,21 @@ def _legacy_group_fence_error(rid, session, params):
     """Fence direct prompts into a hosted room from older Desktop builds (they know the
     ``Group: <room-id>`` title but not the authority marker; a direct prompt would start a
     second renderer driver)."""
-    title = str(session.get("title") or "")
+    title = str(session.get("title") or session.get("pending_title") or "")
+    if not title and session.get("source") == "bot_room" and session.get("session_key"):
+        try:
+            with _session_db(session) as db:
+                row = db.get_session(session["session_key"])
+                title = str((row or {}).get("title") or "")
+        except Exception:
+            return _err(rid, 5122, _GROUP_PROBE_FAILED_MSG)
+    opaque = title.removeprefix("Group: scope-v1:")
+    if (session.get("source") == "bot_room" and title.startswith("Group: scope-v1:")
+            and len(opaque) == 64 and all(char in "0123456789abcdef" for char in opaque)):
+        # This reserved binding is created only for authority-managed local turns;
+        # unlike a legacy display title, its hash cannot be used to look up a room.
+        return _err(rid, 4122,
+                    "This room is managed by its gateway. Update Hermes Desktop to continue it.")
     room_id = title.removeprefix("Group: ").strip() if title.startswith("Group: ") else ""
     # New local sessions retain the authority-owned room prefix plus an opaque
     # thread/member suffix. Direct clients must not bypass ownership via that suffix.
