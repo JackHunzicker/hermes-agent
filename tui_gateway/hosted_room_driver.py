@@ -409,7 +409,9 @@ class HostedRoomRuntime:
         return state.complete_task_cancel(
             self.db_path, task["identity"], clock=self.clock,
             cancel_id=task["cancel_id"] if cancel_id is None else cancel_id,
-            expected_cancel_generation=task["cancel_generation"])
+            expected_cancel_generation=task["cancel_generation"],
+            expected_execution_generation=task["execution_generation"],
+            native_terminal_acknowledged=True if _native_uncertain(task) else None)
 
     def _resolve_indeterminate(
         self, binding: HostedRoomBinding, task: Mapping[str, Any], lease: state.DriverLease,
@@ -449,13 +451,33 @@ class HostedRoomRuntime:
         profile = task["payload"]["target_profile"]
         return transport, profile, self._resume_exact(transport, binding.room_id, profile, task)
 
-    @staticmethod
+    def _retain_native_uncertainty(self, task: Mapping[str, Any], proof: Mapping[str, Any]) -> bool:
+        if not (proof.get("native_terminal_acknowledged") is False
+                and proof.get("task_id") == task["identity"].task_id
+                and proof.get("execution_generation") == task["execution_generation"]):
+            return False
+        lease = self._leases.get(task["identity"].room_id)
+        if lease is not None:
+            from gateway.hosted_room_driver_native import record_native_uncertainty
+            self._fenced(record_native_uncertainty, None, task, lease,
+                         result=_bounded_terminal_result(proof))
+        return True
+
     def _terminal_from_history(
-        transport: InternalSessionRPC, profile: str, session_id: str, task: Mapping[str, Any]
+        self, transport: InternalSessionRPC, profile: str, session_id: str, task: Mapping[str, Any]
     ) -> _TerminalReceipt | None:
-        return _find_terminal_receipt(
-            transport.history(**_session_kw(profile, session_id)),
-            task["identity"], int(task["execution_generation"]))
+        history = transport.history(**_session_kw(profile, session_id))
+        for message in reversed(history):
+            if (message.get("role") != "assistant" or message.get("task_id") != task["identity"].task_id
+                    or message.get("execution_generation") != task["execution_generation"]):
+                continue
+            if self._retain_native_uncertainty(task, message):
+                return None
+            if _native_uncertain(task) and message.get("native_terminal_acknowledged") is not True:
+                continue
+            if receipt := _find_terminal_receipt([message], task["identity"], int(task["execution_generation"])):
+                return receipt
+        return None
 
     def _peer_stop_acknowledged(self, binding: HostedRoomBinding, task: Mapping[str, Any]) -> bool:
         """Probe a peer's exact durable terminal Stop receipt before reading history."""
@@ -465,17 +487,28 @@ class HostedRoomRuntime:
         info = transport.info(**_session_kw(profile, session_id))
         return (
             not _info_active(info)
+            and info.get("native_terminal_acknowledged") is not False
+            and (not _native_uncertain(task) or info.get("native_terminal_acknowledged") is True)
             and str(info.get("status") or "") in _STOP_ACK_STATUSES
             and str(info.get("task_id") or "") == task["identity"].task_id
             and int(info.get("execution_generation") or 0) == int(task["execution_generation"]))
 
     def _interrupt_stopping_task(self, binding: HostedRoomBinding, task: Mapping[str, Any]) -> bool:
+        task = state.get_task(self.db_path, task["identity"])
         transport, profile, session_id = self._open_session(binding, task)
         if session_id is None:
+            if _native_uncertain(task):
+                return False
             # A local turn cannot survive without its canonical session, so an authoritative
             # absence is a safe Stop acknowledgement (errors raise); a peer stays uncertain.
             return transport is not None and transport is self.rpc
         info = transport.info(**_session_kw(profile, session_id))
+        if self._retain_native_uncertainty(task, info):
+            return False
+        if _native_uncertain(task):
+            return (info.get("native_terminal_acknowledged") is True
+                    and _target_interruption_from_info(
+                        info, task["identity"], int(task["execution_generation"])) is not None)
         if not _info_active(info):
             # History was checked just before this probe: an inactive exact session cannot
             # keep executing, and after a restart its process-local task marker is absent.
@@ -484,6 +517,10 @@ class HostedRoomRuntime:
             return False
         result = transport.interrupt(
             **_session_kw(profile, session_id), expected_task_id=task["identity"].task_id)
+        if result is not None and self._retain_native_uncertainty(task, {
+                **result, "task_id": task["identity"].task_id,
+                "execution_generation": task["execution_generation"]}):
+            return False
         return result is not None and (
             result.get("interrupted") is True
             or str(result.get("status") or "") in _STOP_ACK_STATUSES)
@@ -913,20 +950,36 @@ class HostedRoomRuntime:
         self, binding: HostedRoomBinding, attempt: state.TaskAttempt, receipt: Mapping[str, Any]
     ) -> None:
         """Durably commit one in-process terminal receipt for ``attempt``."""
+        coordinates = {
+            "task_id": attempt.identity.task_id, "thread_id": attempt.identity.thread_id,
+            "turn_id": attempt.identity.turn_id, "execution_generation": attempt.execution_generation}
+        if any(key in receipt and receipt[key] != value for key, value in coordinates.items()):
+            self.wakeup()
+            return
         status = receipt.get("status")
+        if receipt.get("native_terminal_acknowledged") is False:
+            with suppress(state.StaleTaskError, state.StaleLeaseError):
+                current = state.get_task(self.db_path, attempt.identity)
+                from gateway.hosted_room_driver_native import record_native_uncertainty
+                self._fenced(
+                    record_native_uncertainty, binding, current, attempt.lease,
+                    expected_execution_generation=attempt.execution_generation,
+                    result=_bounded_terminal_result(receipt))
+            self.wakeup()
+            return
         target_interrupted = (
             status in {"cancelled", "interrupted"}
-            and receipt.get("target_interrupted") is True
-            and str(receipt.get("task_id") or "") == attempt.identity.task_id
-            and int(receipt.get("execution_generation") or 0)
-            == attempt.execution_generation
+            and (receipt.get("native_terminal_acknowledged") is True or (
+                receipt.get("target_interrupted") is True
+                and str(receipt.get("task_id") or "") == attempt.identity.task_id
+                and int(receipt.get("execution_generation") or 0) == attempt.execution_generation))
         )
         if status in {"cancelled", "interrupted"} and not target_interrupted:
             self.wakeup()
             return
         terminal = (
             _target_interruption_receipt(
-                attempt.identity, attempt.execution_generation
+                attempt.identity, attempt.execution_generation, receipt
             )
             if target_interrupted
             else _TerminalReceipt(
@@ -943,7 +996,8 @@ class HostedRoomRuntime:
         except state.StaleTaskError:
             with suppress(state.StaleLeaseError, state.StaleTaskError):
                 current = state.get_task(self.db_path, attempt.identity)
-                if current["status"] == "stopping":
+                if (current["status"] == "stopping"
+                        and current["execution_generation"] == attempt.execution_generation):
                     if target_interrupted:
                         self._complete_acknowledged_stop(
                             binding, current, attempt.lease
@@ -974,7 +1028,7 @@ class HostedRoomRuntime:
         lease = attempt.lease
         while not self._stop.is_set():
             task = state.get_task(self.db_path, attempt.identity)
-            if task["status"] in state.TERMINAL_STATUSES:
+            if task["status"] in state.TERMINAL_STATUSES or task["status"] == "indeterminate":
                 return None
             if task["status"] == "stopping":
                 try:
@@ -1019,7 +1073,8 @@ class HostedRoomRuntime:
             result={
                 "error": "This Group Chat turn exceeded its configured time limit and was stopped.",
                 "reason_code": "turn_deadline_exceeded",
-                "timeout_seconds": self.turn_timeout_seconds})
+                "timeout_seconds": self.turn_timeout_seconds,
+                **({"native_terminal_acknowledged": True} if _native_uncertain(task) else {})})
 
     def _expire_attempt_deadline(
         self, binding: HostedRoomBinding, task: Mapping[str, Any], lease: state.DriverLease
@@ -1065,7 +1120,10 @@ class HostedRoomRuntime:
             if read_history else None)
         info = transport.info(**_session_kw(profile, session_id))
         self._report_pending_action(binding, task, session_id=session_id, info=info)
-        if target_side:
+        if self._retain_native_uncertainty(task, info):
+            return _RecoveryInspection(terminal=None, active=True, status="indeterminate")
+        if (target_side or info.get("native_terminal_acknowledged") is True) and (
+                not _native_uncertain(task) or info.get("native_terminal_acknowledged") is True):
             receipt = _target_interruption_from_info(
                 info, task["identity"], int(task["execution_generation"])
             ) or receipt
@@ -1116,7 +1174,7 @@ class HostedRoomRuntime:
             attempt_key = (
                 binding.room_id, task["identity"].task_id, int(task["execution_generation"]))
             is_local = self._transport_for(binding, task) is self.rpc
-            if is_local and attempt_key not in inspected:
+            if is_local and (attempt_key not in inspected or _native_uncertain(task)):
                 inspection = self._inspect_local_recovery_session(binding, task)
                 inspected.add(attempt_key)
                 if inspection.terminal is not None:
@@ -1143,7 +1201,7 @@ class HostedRoomRuntime:
                     binding, task, lease, inspection.terminal, publish=False)
                 inspected.discard(attempt_key)
                 continue
-            if self.clock() < deadline:
+            if _native_uncertain(state.get_task(self.db_path, task["identity"])) or self.clock() < deadline:
                 self._set_blocked(binding.room_id, True)
                 return True
             deferred = self._fenced(
@@ -1305,13 +1363,15 @@ def _bounded_terminal_result(receipt: Mapping[str, Any]) -> dict[str, Any]:
         "message_id": receipt.get("message_id"), "text": text,
         **({"artifacts": receipt.get("artifacts")} if receipt.get("artifacts") else {}),
         **({"run_id": receipt.get("run_id")} if receipt.get("run_id") else {}),
+        **{key: receipt[key] for key in ("native_terminal_acknowledged", "codex_thread_id", "codex_turn_id")
+           if key in receipt},
         **({"error": error} if error else {}),
         **({"reason_code": reason_code} if reason_code else {}),
         **({"truncated": True} if truncated or error_truncated else {})}
 
 
 def _target_interruption_receipt(
-    identity: state.TaskIdentity, execution_generation: int
+    identity: state.TaskIdentity, execution_generation: int, proof: Mapping[str, Any] | None = None
 ) -> _TerminalReceipt:
     return _TerminalReceipt(
         status="failed",
@@ -1321,6 +1381,8 @@ def _target_interruption_receipt(
         result={
             "error": _TARGET_INTERRUPTION_ERROR,
             "reason_code": TARGET_INTERRUPTED,
+            **{key: proof[key] for key in ("native_terminal_acknowledged", "codex_thread_id", "codex_turn_id")
+               if proof is not None and key in proof},
         },
     )
 
@@ -1330,12 +1392,13 @@ def _target_interruption_from_info(
 ) -> _TerminalReceipt | None:
     if (
         _info_active(info)
+        or info.get("native_terminal_acknowledged") is False
         or str(info.get("status") or "") not in {"cancelled", "interrupted"}
         or str(info.get("task_id") or "") != identity.task_id
         or int(info.get("execution_generation") or 0) != execution_generation
     ):
         return None
-    return _target_interruption_receipt(identity, execution_generation)
+    return _target_interruption_receipt(identity, execution_generation, info)
 
 
 def _find_terminal_receipt(
@@ -1346,7 +1409,11 @@ def _find_terminal_receipt(
         if (
             message.get("task_id") != identity.task_id
             or message.get("execution_generation") != execution_generation
-            or message.get("role") != "assistant" or status not in {"settled", "failed"}):
+            or message.get("role") != "assistant"):
+            continue
+        if message.get("native_terminal_acknowledged") is False:
+            return None
+        if status not in {"settled", "failed"}:
             continue
         receipt_id = message.get("message_id")
         if not isinstance(receipt_id, str) or not receipt_id:
@@ -1356,8 +1423,15 @@ def _find_terminal_receipt(
             result=_bounded_terminal_result(
                 {"message_id": receipt_id, "text": message.get("content", ""),
                  "error": message.get("error"), "reason_code": message.get("reason_code"),
-                 "artifacts": message.get("artifacts"), "run_id": message.get("run_id")}))
+                 "artifacts": message.get("artifacts"), "run_id": message.get("run_id"),
+                 **{key: message[key] for key in ("native_terminal_acknowledged", "codex_thread_id", "codex_turn_id")
+                    if key in message}}))
     return None
+
+
+def _native_uncertain(task: Mapping[str, Any]) -> bool:
+    result = task.get("result")
+    return isinstance(result, Mapping) and result.get("native_terminal_acknowledged") is False
 
 
 def _info_active(info: Mapping[str, Any]) -> bool:

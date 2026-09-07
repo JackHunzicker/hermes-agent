@@ -170,8 +170,13 @@ class HostedRoomServerRPC:
             return {"active": bool(record.get("running")), "task_id": None}
         with lock:
             task = record.get("_hosted_room_task")
-            result = {"active": bool(record.get("running")),
-                      "task_id": task.get("task_id") if isinstance(task, dict) else None}
+            receipt = record.get("_hosted_room_receipt")
+            result = dict(receipt) if isinstance(receipt, dict) and not record.get("running") else {}
+            result["active"] = bool(record.get("running"))
+            if isinstance(task, dict):
+                result.update({key: task[key] for key in ("task_id", "execution_generation") if key in task})
+            else:
+                result.setdefault("task_id", None)
             pending_reader = getattr(self.server, "_pending_approval_request_payload", None)
             if callable(pending_reader) and (pending := pending_reader(str(record.get("session_key") or ""))):
                 result["status"] = "waiting_for_approval"
@@ -195,9 +200,15 @@ class HostedRoomServerRPC:
         self, *, profile: str, session_id: str, source: str, expected_task_id: str
     ) -> Mapping[str, Any] | None:
         del source
-        return self._call("session.interrupt", {
+        record = self._session_record(session_id)
+        native = getattr((record or {}).get("agent"), "api_mode", None) == "codex_app_server"
+        result = self._call("session.interrupt", {
             "profile": profile, "session_id": session_id,
             "expected_hosted_task_id": expected_task_id})
+        if native and result.get("status") == "interrupted":
+            # The RPC acknowledges delivery of the request, not the native terminal event.
+            return {**result, "status": "stopping", "native_terminal_acknowledged": False}
+        return result
 
 
     def _forget_attachment_attempt(

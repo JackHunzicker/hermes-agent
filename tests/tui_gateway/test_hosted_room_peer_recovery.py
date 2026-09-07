@@ -103,3 +103,7 @@ def test_peer_recovery_replays_only_indeterminate_generation(tmp_path: Path):
     assert recovered["task_id"] == "task-1"
     assert recovered["execution_generation"] == 1
     assert recovered["prompt"] == "Recover the accepted review."
+
+    service._resolve_member_transport(service.bindings()[0], {
+        **task, "status": "indeterminate", "result": {"native_terminal_acknowledged": False}})
+    assert peer.recoveries[-1]["receipt_only"] is True

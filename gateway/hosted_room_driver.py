@@ -83,6 +83,8 @@ _BEGIN_STOP_SQL = _task_update(
     "status='stopping', cancel_generation=?, cancel_id=?, updated_at=?",
     "status IN ('running', 'indeterminate', 'deferred') AND cancel_generation=?")
 _COMPLETE_STOP_SQL = _task_update(
+    "result_json=CASE WHEN ? THEN json_set(COALESCE(result_json, '{}'), "
+    "'$.native_terminal_acknowledged', json('true')) ELSE result_json END, "
     "status='cancelled', terminal_at=?, updated_at=?", "status='stopping' AND cancel_id=? AND cancel_generation=?")
 
 # Lease-first recovery transitions: name -> (fenced status, SET clause, generation-guard stale message,
@@ -530,6 +532,8 @@ def _settlement(
     result_json = _canonical_json(result)
     now = _timestamp(clock)
     def replay(row: sqlite3.Row) -> dict[str, Any] | None:
+        from gateway.hosted_room_driver_native import require_native_ack
+        require_native_ack(row, result)
         if row["settlement_id"] is None:
             return None
         if (row["settlement_id"], row["settlement_status"], row["result_json"]) == (settlement_id, status, result_json):
@@ -870,6 +874,8 @@ def resolve_indeterminate_task(
     with _transaction(db_path) as conn:
         _require_active_lease(conn, lease, now=now)
         row = _load_task(conn, identity)
+        from gateway.hosted_room_driver_native import require_native_ack
+        require_native_ack(row, result)
         if row["settlement_id"] is not None:
             if (
                 row["settlement_id"] == settlement_id
@@ -942,6 +948,8 @@ def resolve_indeterminate_cancellation(
     with _transaction(db_path) as conn:
         _require_active_lease(conn, lease, now=now)
         row = _load_task(conn, identity)
+        from gateway.hosted_room_driver_native import require_native_ack
+        require_native_ack(row)
         if row["status"] == "cancelled" and row["cancel_id"] == cancel_id:
             _record_retry_receipt(conn, retry_id=retry_id, row=row, now=now)
             return _task_from_row(row, idempotent=True)
@@ -1010,6 +1018,8 @@ def requeue_indeterminate_task(
             or int(row["cancel_generation"]) != expected_cancel_generation
         ):
             raise StaleTaskError("indeterminate task generation changed")
+        from gateway.hosted_room_driver_native import require_native_ack
+        require_native_ack(row)
         stopped = _cancel_task_behind_stop_fence(conn, row, now=now)
         if stopped is not None:
             _record_retry_receipt(conn, retry_id=retry_id, row=row, now=now)
@@ -1045,6 +1055,8 @@ def defer_indeterminate_task(
     result_json = _canonical_json({"reason": reason, "retryable": True})
     now = _timestamp(clock)
     def replay(row: sqlite3.Row) -> dict[str, Any] | None:
+        from gateway.hosted_room_driver_native import require_native_ack
+        require_native_ack(row)
         deferred = _generations_match(row, "deferred", expected_execution_generation, expected_cancel_generation)
         return _task_from_row(row, idempotent=True) if deferred and row["result_json"] == result_json else None
     return _generation_transition(
@@ -1173,18 +1185,25 @@ def begin_task_cancel(
 
 
 def complete_task_cancel(
-    db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any, expected_cancel_generation: int, clock: Clock
+    db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any, expected_cancel_generation: int, clock: Clock,
+    expected_execution_generation: int | None = None, native_terminal_acknowledged: bool | None = None,
 ) -> dict[str, Any]:
     """Commit cancellation only after the transport acknowledges exact Stop."""
     cancel_id = _identifier(cancel_id, label="cancel_id")
     now = _timestamp(clock)
     def guard(row: sqlite3.Row) -> None:
+        if expected_execution_generation is not None and row["execution_generation"] != expected_execution_generation:
+            raise StaleTaskError("task stop acknowledgement execution is stale")
+        from gateway.hosted_room_driver_native import require_native_ack
+        require_native_ack(row, {"native_terminal_acknowledged": native_terminal_acknowledged})
         if (row["status"], row["cancel_id"], int(row["cancel_generation"])) != (
             "stopping", cancel_id, expected_cancel_generation):
             raise StaleTaskError("task stop acknowledgement is stale")
     return _transition(
-        db_path, identity, now=now, replay=_cancel_replay(cancel_id), guard=guard, sql=_COMPLETE_STOP_SQL,
-        set_params=(now, now), fence_params=(cancel_id, expected_cancel_generation),
+        db_path, identity, now=now, replay=_cancel_replay(cancel_id), guard=guard,
+        sql=_COMPLETE_STOP_SQL,
+        set_params=(native_terminal_acknowledged is True, now, now),
+        fence_params=(cancel_id, expected_cancel_generation),
         stale="task changed during stop acknowledgement")
 
 

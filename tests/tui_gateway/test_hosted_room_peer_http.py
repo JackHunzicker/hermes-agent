@@ -275,6 +275,23 @@ def test_target_interruption_history_is_an_exact_truthful_failure(
     ]
 
 
+@pytest.mark.parametrize("ack", [False, True])
+def test_native_acknowledgement_survives_peer_history_and_info(peer_server, ack):
+    from gateway.hosted_room_driver import TaskIdentity
+    from tui_gateway.hosted_room_driver import _find_terminal_receipt, _target_interruption_from_info
+    client = PeerRunsHTTPClient(base_url=peer_server, api_key="")
+    accepted = client.dispatch(dispatch=_dispatch(), grant="signed.room.grant")
+    FakePeer.runs["run-1"].update(status="interrupted", native_terminal_acknowledged=ack,
+                                  codex_thread_id="native-thread", codex_turn_id="native-turn")
+    coords = dict(room_id="room-1", profile="reviewer", session_id=accepted["session_id"], grant="signed.room.grant")
+    history, info = client.history(**coords), client.status(**coords)
+    assert history[0]["native_terminal_acknowledged"] is ack
+    assert info["native_terminal_acknowledged"] is ack
+    identity = TaskIdentity("room-1", "task-1", "thread-1", "turn-1")
+    assert (_find_terminal_receipt(history, identity, 1) is None) is (ack is False)
+    assert (_target_interruption_from_info(info, identity, 1) is None) is (ack is False)
+
+
 @pytest.mark.parametrize("scoped", [False, True])
 def test_named_profile_prefixes_every_roomlink_request(monkeypatch, scoped):
     captured = {}

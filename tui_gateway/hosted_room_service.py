@@ -460,8 +460,10 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
             or not isinstance(payload, Mapping) or execution_generation < 1
             or task.get("status") not in {"indeterminate", "stopping"}):
             return
-        receipt_only = task.get("status") == "stopping" or (
-            hosted_room_link_records.room_link_retirement_started(self.db_path, room_id=binding.room_id))
+        receipt_only = (
+            (task.get("result") or {}).get("native_terminal_acknowledged") is False
+            or task.get("status") == "stopping"
+            or hosted_room_link_records.room_link_retirement_started(self.db_path, room_id=binding.room_id))
         prompt = payload.get("prompt")
         source_event_seq = int(payload.get("source_event_seq") or 0)
         if not isinstance(prompt, str) or source_event_seq < 1 or not route.trace_id:

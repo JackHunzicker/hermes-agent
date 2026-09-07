@@ -630,14 +630,20 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             None, lambda: _run_agent_sync(self, run, agent, approval_notify, _api_server=_api_server))
         if not isinstance(result, dict):
             result = {}
-        if run_id in self._stopping_run_ids and result.get("interrupted") is True:
-            _finish("cancelled")
+        native_proof = {key: result[key] for key in (
+            "native_terminal_acknowledged", "codex_thread_id", "codex_turn_id") if key in result}
+        if result.get("native_terminal_acknowledged") is False:
+            _finish("interrupted", native_proof, output=result.get("final_response", ""),
+                    error="Native terminal acknowledgement is missing; automatic retry is unsafe.")
+        elif run_id in self._stopping_run_ids and result.get("interrupted") is True:
+            _finish("cancelled", native_proof)
         elif result.get("failed"):
             # Non-retryable client errors (401/400) return failed=True rather than raising.
-            _finish("failed", error=_redact_api_error_text(result.get("error") or "agent run failed"))
+            _finish("failed", native_proof, error=_redact_api_error_text(result.get("error") or "agent run failed"))
         else:
             # Undelivered steer text rides on the terminal event/status for client replay.
-            extra = {"pending_steer": result["pending_steer"]} if result.get("pending_steer") else {}
+            extra = {**native_proof, **(
+                {"pending_steer": result["pending_steer"]} if result.get("pending_steer") else {})}
             if result.get("room_artifacts"):
                 extra["artifacts"] = result["room_artifacts"]
             _finish("completed", extra, output=result.get("final_response", ""), usage=usage)

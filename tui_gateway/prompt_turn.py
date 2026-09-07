@@ -621,6 +621,9 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
     result, agent = st.result, st.agent
     raw, status, last_reasoning = _turn_outcome(result)
     payload = {"text": raw, "usage": _get_usage(agent), "status": status}
+    native_proof = {key: result[key] for key in (
+        "native_terminal_acknowledged", "codex_thread_id", "codex_turn_id") if key in result}
+    payload.update(native_proof)
     if last_reasoning:
         payload["reasoning"] = last_reasoning
     if status_note:
@@ -661,17 +664,28 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
         if _error_surface:
             payload["error_surface"] = _error_surface
     if st.terminal_callback is not None:
-        st.receipt_attempted = True
-        st.terminal_callback({
-            "status": {"interrupted": "cancelled", "error": "failed"}.get(status, "settled"),
+        receipt = {
+            "status": ("indeterminate" if result.get("native_terminal_acknowledged") is False
+                       else {"interrupted": "cancelled", "error": "failed"}.get(status, "settled")),
             "text": raw if isinstance(raw, str) else str(raw),
-            **({"error": str(error_value or raw)} if status == "error" else {})})
-        st.receipt_committed = True
+            **native_proof,
+            **({"error": str(error_value or raw)} if status == "error" else
+               {"error": str(error_value)} if error_value else {})}
+        _commit_hosted_turn_receipt(session, st, receipt)
     from tui_gateway.classic_exports import settle
     settle(session, raw, status == "complete")
     if st.receipt_committed:
         _retire_turn_marker(session, st.marker_key)
     return payload, raw, status
+
+
+def _commit_hosted_turn_receipt(session: dict, st: _TurnRun, receipt: dict) -> None:
+    st.receipt_attempted = True
+    st.terminal_callback(receipt)
+    if "native_terminal_acknowledged" in receipt:
+        with session["history_lock"]:
+            session["_hosted_room_receipt"] = {**session.get("_hosted_room_task", {}), **receipt}
+    st.receipt_committed = True
 
 
 def _recover_turn_exception(sid: str, session: dict, st: _TurnRun, e: BaseException) -> None:
@@ -688,10 +702,13 @@ def _recover_turn_exception(sid: str, session: dict, st: _TurnRun, e: BaseExcept
     # A finalizer exception can leave in-memory history at the turn-start snapshot.
     _restore_agent_history_after_turn_error(session, st.agent)
     if st.terminal_callback is not None and not st.receipt_attempted:
-        st.receipt_attempted = True
         try:
-            st.terminal_callback({"status": "failed", "text": "", "error": str(e)})
-            st.receipt_committed = True
+            native_proof = {key: st.result[key] for key in (
+                "native_terminal_acknowledged", "codex_thread_id", "codex_turn_id")
+                if isinstance(st.result, dict) and key in st.result}
+            _commit_hosted_turn_receipt(session, st, {
+                "status": "indeterminate" if native_proof.get("native_terminal_acknowledged") is False else "failed",
+                "text": "", "error": str(e), **native_proof})
         except Exception:
             logger.exception("hosted room terminal receipt commit failed")
     try:

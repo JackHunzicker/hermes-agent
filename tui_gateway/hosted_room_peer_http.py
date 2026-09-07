@@ -48,7 +48,8 @@ _RECEIPT_SCOPE_FIELDS = (
 _TERMINAL_RUN_STATES = frozenset({"completed", "failed", "interrupted", "cancelled"})
 _ACTIVE_RUN_STATES = frozenset({"queued", "running", "waiting_for_approval", "stopping"})
 _KNOWN_RUN_STATES = _TERMINAL_RUN_STATES | _ACTIVE_RUN_STATES
-_RUN_STATUS_KEYS = ("run_id", "status", "output", "error", "approval", "last_event", "artifacts")
+_NATIVE_PROOF_KEYS = ("native_terminal_acknowledged", "codex_thread_id", "codex_turn_id")
+_RUN_STATUS_KEYS = ("run_id", "status", "output", "error", "approval", "last_event", "artifacts", *_NATIVE_PROOF_KEYS)
 # Older target gateways wrap these inside the generic dispatch error; normalize locally.
 _LEGACY_DISPATCH_MESSAGE_CODES = (
     ("room grant", "invalid_room_grant"),
@@ -585,7 +586,7 @@ class PeerRunsHTTPClient:
             cached = None  # A retired bearer's refusal must not poison its validated replacement.
         if cached is not None:
             status = cached["status"]
-            if status.get("status") in _TERMINAL_RUN_STATES:
+            if status.get("status") in _TERMINAL_RUN_STATES and status.get("native_terminal_acknowledged") is not False:
                 return status
             if now < float(cached["next_poll_at"]):
                 error = cached.get("error")
@@ -624,6 +625,7 @@ class PeerRunsHTTPClient:
         target_interrupted = state in {"interrupted", "cancelled"}
         return [{
             "role": "assistant", "task_id": receipt["task_id"],
+            **{key: status[key] for key in _NATIVE_PROOF_KEYS if key in status},
             "execution_generation": receipt["execution_generation"],
             "status": "settled" if state == "completed" else "failed",
             "message_id": f"peer-run:{status.get('run_id')}",
@@ -645,7 +647,8 @@ class PeerRunsHTTPClient:
             "active": status.get("status") in _ACTIVE_RUN_STATES, "task_id": receipt["task_id"],
             "execution_generation": receipt["execution_generation"],
             "status": status.get("status"), "run_id": status.get("run_id"),
-            "approval": status.get("approval")}
+            "approval": status.get("approval"),
+            **{key: status[key] for key in _NATIVE_PROOF_KEYS if key in status}}
 
     def approve_receipt(
         self, *, task_id: str, execution_generation: int, request_id: str, choice: str, grant: str
