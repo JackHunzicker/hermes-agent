@@ -159,8 +159,7 @@ def test_unavailable_record_transport_does_not_stop_history(copying):
         copying.source, room_id="room")["latest_seq"]
 
 
-@pytest.mark.parametrize("busy", [False, True], ids=["quiet-control", "continuous-history"])
-def test_recovered_alternate_gets_a_work_attempt(pair, monkeypatch, busy):
+def record_profiles(pair):
     add_profile(pair)
     for member, profile in (("reviewer", "reviewer"), ("z-other", "default")):
         link = save_link(pair.source, member_id=member, profile=profile,
@@ -168,6 +167,10 @@ def test_recovered_alternate_gets_a_work_attempt(pair, monkeypatch, busy):
         claims = peer.decode_room_grant(SECRET, link.grant, permission=records.PERMISSION)
         rooms.reserve_peer_room(pair.target, claims=claims, expires_at=claims["status_expires_at"])
 
+
+@pytest.mark.parametrize("busy", [False, True], ids=["quiet-control", "continuous-history"])
+def test_recovered_alternate_gets_a_work_attempt(pair, monkeypatch, busy):
+    record_profiles(pair)
     recovered = False
     attempts, bodies = [], []
 
@@ -209,3 +212,96 @@ def test_recovered_alternate_gets_a_work_attempt(pair, monkeypatch, busy):
         assert pair.http.requests[-1][1]["page"]["cursor"] == rooms.room_state(
             pair.source, room_id="room")["latest_seq"]
     assert pub.status()["work_records"][0]["status"] == "acked", attempts[start:]
+
+
+@pytest.mark.parametrize("busy", [False, True], ids=["quiet-control", "continuous-history"])
+def test_recovered_work_route_with_stale_history_failure(pair, monkeypatch, busy):
+    record_profiles(pair)
+    add_task(pair.source, "anchored")
+    recovered = False
+    work_attempts, history_failures, bodies = [], [], []
+
+    def unavailable(request):
+        raise urllib.error.HTTPError(request.full_url, 503, "unavailable", {},
+            io.BytesIO(b'{"error":{"code":"unavailable"}}'))
+
+    def transport(request, *, timeout):
+        token = request.get_header("Authorization").removeprefix("HermesRoom ")
+        is_work = request.full_url.endswith("/work-records")
+        claims = peer.decode_room_grant(SECRET, token, permission=records.PERMISSION if is_work else "replicate")
+        member = claims["member_id"]
+        if not is_work:
+            if member == "z-other" and not recovered:
+                history_failures.append(member)
+                unavailable(request)
+            return pair.http(request, timeout=timeout)
+        record = json.loads(request.data)["record"]
+        work_attempts.append(member)
+        bodies.append(record)
+        if member == "reviewer" or not recovered:
+            unavailable(request)
+        reply = records.ingest(pair.target, record=record, token=token, secret=SECRET,
+                               target_install_id=TARGET, target_profile=claims["target_profile"])
+        return io.BytesIO(json.dumps(reply).encode())
+
+    monkeypatch.setattr("hermes_cli.urllib_security.open_credentialed_url", transport)
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    pub._publish_one(KEY)
+    pub._publish_one(KEY)
+    append(pair.source, "beta-history-failure")
+    pub._publish_one(("room", "z-other"))
+    assert work_attempts == ["reviewer", "z-other"]
+    assert history_failures == ["z-other"]
+    pub._publish_one(KEY)
+    status = {row["member_id"]: row for row in pub.status()["routes"]}
+    assert status["z-other"]["status"] == "unavailable"
+    assert status["reviewer"]["status"] == "acked"
+    assert {row["work_record_status"] for row in status.values()} == {"unavailable"}
+    frozen = bodies[0]
+    assert frozen["tasks"][0]["phase"] == "queued"
+    assert pair.http.requests[-1][1]["page"]["cursor"] >= frozen["history"]["seq"]
+
+    recovered = True
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    start = len(work_attempts)
+    for turn in range(6):
+        if busy:
+            append(pair.source, f"busy-after-recovery-{turn}")
+        pub._publish_one(("room", "z-other" if turn % 2 == 0 else "reviewer"))
+        if pub.status()["work_records"][0]["status"] == "acked":
+            break
+    assert all(body == frozen for body in bodies)
+    if busy:
+        assert pair.http.requests[-1][1]["page"]["cursor"] == rooms.room_state(
+            pair.source, room_id="room")["latest_seq"]
+    assert pub.status()["work_records"][0]["status"] == "acked", work_attempts[start:]
+
+
+def test_unacknowledged_anchor_still_prefers_healthy_history_route(pair, monkeypatch):
+    record_profiles(pair)
+    for turn in range(4):
+        add_task(pair.source, str(turn))
+    failures = {"reviewer": 1, "z-other": 1}
+
+    def transport(request, *, timeout):
+        assert not request.full_url.endswith("/work-records")
+        token = request.get_header("Authorization").removeprefix("HermesRoom ")
+        member = peer.decode_room_grant(SECRET, token, permission="replicate")["member_id"]
+        if failures[member]:
+            failures[member] -= 1
+            raise urllib.error.HTTPError(request.full_url, 503, "unavailable", {},
+                io.BytesIO(b'{"error":{"code":"unavailable"}}'))
+        return pair.http(request, timeout=timeout)
+
+    monkeypatch.setattr("hermes_cli.urllib_security.open_credentialed_url", transport)
+    monkeypatch.setattr(publisher, "PAGE_LIMIT", 1)
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    pub._publish_one(KEY)
+    pub._publish_one(("room", "z-other"))
+    assert failures == {"reviewer": 0, "z-other": 0}
+    pub._publish_one(KEY)
+    assert pair.http.requests[-1][1]["page"]["cursor"] == 1
+    route = pub._select_route(pub._load_route(("room", "z-other")))
+    assert route.key == KEY
+    pub._publish_one(("room", "z-other"))
+    assert pair.http.requests[-1][1]["page"]["cursor"] == 2

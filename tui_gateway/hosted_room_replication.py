@@ -374,9 +374,15 @@ class HostedRoomReplicationPublisher:
             ).fetchall()
             target = conn.execute(f"SELECT * FROM {_TARGET_TABLE} WHERE room_id=? AND target_install_id=?",
                                   (initial.key[0], initial.link.catalog.installation_id)).fetchone()
+            work_ready = (target is not None and (target["acked_seq"] > 0 or target["status"] == "acked")
+                          and work_records.pending_delivery_is_anchored_locked(
+                              conn, room_id=initial.key[0], target_install_id=initial.link.catalog.installation_id,
+                              through_seq=target["acked_seq"]))
         selected = []
         room = rooms.room_state(self.db_path, room_id=initial.key[0], include_disbanded=True)
-        history_needed = (target is None or target["pending_end"] is not None
+        # Newer conversation traffic must not let stale history-health scores
+        # outrank an eligible work route after its frozen anchor is acknowledged.
+        history_needed = not work_ready and (target is None or target["pending_end"] is not None
                           or target["acked_seq"] < room["latest_seq"] or target["status"] != "acked")
         for raw in candidates:
             if not _replication_hint(raw["grant"]):
