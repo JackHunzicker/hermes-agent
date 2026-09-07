@@ -156,6 +156,9 @@ export function compactGroupMessageAuthor(author: GroupMessageAuthor): GroupMess
     kind,
     name: String(author?.name || (kind === 'member' ? 'Bot' : 'You')).slice(0, 128),
     ...(author?.source ? { source: String(author.source).slice(0, 128) } : {}),
+    ...(kind === 'user' && identityText(author?.hostedUserId)
+      ? { hostedUserId: identityText(author.hostedUserId) }
+      : {}),
     ...(identity ? { hostedIdentity: identity } : {}),
     ...(evidence ? { hostedIdentityEvidence: evidence } : {})
   }
@@ -163,6 +166,16 @@ export function compactGroupMessageAuthor(author: GroupMessageAuthor): GroupMess
 
 /** Hosted authors reach this merge only through event ID/sequence matching. */
 export function mergeGroupMessageAuthor(prior: GroupMessage, incoming: GroupMessage): GroupMessageAuthor {
+  // Old Desktop mirrors replaced every human actor with You. A corroborated
+  // unsequenced copy must not overwrite the server-owned author from replay.
+  if (
+    prior.from.kind === 'user' && prior.from.hostedUserId &&
+    groupChatSyncSequence(prior) !== null && groupChatSyncSequence(incoming) === null &&
+    compatibleGroupMessageCopies(prior, incoming)
+  ) {
+    return prior.from
+  }
+
   const left = authorEvidence(prior.from, prior.seq)
   const right = authorEvidence(incoming.from, incoming.seq)
 

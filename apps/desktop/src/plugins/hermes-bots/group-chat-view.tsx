@@ -615,8 +615,14 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
   const [composerDraft, setComposerDraft] = useState(() => groupComposerDraftSnapshot(composerKey))
 
   if (composerKeyRef.current !== composerKey) {
-    migrateGroupComposerDraft(composerKeyRef.current, composerKey)
+    // Only upgrade this room's legacy name key. Navigating to another room
+    // must not move private drafts (including active reply and attachments).
+    if (composerKeyRef.current === `name:${group}`) {
+      migrateGroupComposerDraft(composerKeyRef.current, composerKey)
+    }
+
     composerKeyRef.current = composerKey
+    setComposerDraft(groupComposerDraftSnapshot(composerKey))
   }
 
   const updateComposerDraft = (mutate: (draft: GroupComposerDraft) => GroupComposerDraft) => {
@@ -656,7 +662,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
     }))
 
   const [confirmDisband, setConfirmDisband] = useState(false)
-  const [confirmRetry, setConfirmRetry] = useState(false)
+  const [confirmRetry, setConfirmRetry] = useState<null | { scope: string; taskId: string }>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Click-to-disambiguate: which log entry is showing its speaker's full
   // @handle (the roster's name-device form when names collide across
@@ -669,8 +675,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
   // (null = the main composer, which STARTS a new thread).
   const [openThreads, setOpenThreads] = useState<Record<string, boolean>>({})
   // Pending image attachments per composer: `null` thread key = the main
-  // composer, otherwise the reply box of that thread. Data URLs, already
-  // downscaled — they ride the send into every responding member's session.
+  // composer, otherwise the reply box of that thread. Original data URLs
+  // ride the send into each responding member's attachment staging.
 
   // Scroll anchoring (#89835): rooms used to open at scroll position 0 and
   // stay there while replies streamed in. Scroll the bottom sentinel into
@@ -963,7 +969,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
               retryCommandId
                 ? void retryFailedHostedRoomCommand(group, retryCommandId).catch(() => undefined)
                 : retryTaskId
-                  ? setConfirmRetry(true)
+                  ? setConfirmRetry({ scope: composerKey, taskId: retryTaskId })
                   : void retryHostedRoomReplay(group).catch(() => undefined)
             }
             size="xs"
@@ -1226,7 +1232,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
     const display = hostedSpeaker
       ? hostedSpeaker.display
       : isUser
-        ? 'You'
+        ? entry.from.name || 'User'
         : displayName(
             member || {
               name: entry.from.name
@@ -1241,7 +1247,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
     // Clicked: append the gateway name so same-named agents on
     // two connections are tellable apart on demand.
     const label = isUser
-      ? 'You'
+      ? display
       : revealed && (!hostedSpeaker || handle)
         ? `${display}${!hostedSpeaker && entry.from.source ? `-${entry.from.source}` : ''} (@${handle})`
         : display
@@ -1615,11 +1621,13 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
       <ConfirmDialog
         confirmLabel={b.group.retryAction}
         description={b.group.retryDesc}
-        onClose={() => setConfirmRetry(false)}
+        onClose={() => setConfirmRetry(null)}
         onConfirm={async () => {
-          await retryHostedGroupChat(group, retryTaskId)
+          if (confirmRetry?.scope === composerKey) {
+            await retryHostedGroupChat(group, confirmRetry.taskId)
+          }
         }}
-        open={confirmRetry}
+        open={confirmRetry?.scope === composerKey}
         title={b.group.retryTitle}
       />
     </div>

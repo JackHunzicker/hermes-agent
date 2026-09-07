@@ -26,8 +26,8 @@ function groupAttachmentKind(file: File): AttachmentKind {
 }
 
 /** File objects → [{ name, data, kind }] (data URLs), oversized files skipped
- *  with a toast. Images are downscaled; PDFs and other files ride as raw data
- *  URLs for the gateway's pdf.attach / file.attach staging. Shared by the
+ *  with a toast. Preserve original bytes for source-qualified downloads;
+ *  display previews must not replace the uploaded file. Shared by the
  *  picker button, the composer paste handler, and room drag & drop. */
 export async function filesToGroupAttachments(files: File[] | FileList | null | undefined): Promise<Attachment[]> {
   const picked: Attachment[] = []
@@ -60,7 +60,7 @@ export async function filesToGroupAttachments(files: File[] | FileList | null | 
     const kind = groupAttachmentKind(file)
     picked.push({
       name: file.name || (kind === 'image' ? 'pasted image' : 'attachment'),
-      data: kind === 'image' ? await normalizeGroupAttachment(data) : data,
+      data,
       kind
     })
   }
@@ -77,37 +77,5 @@ export function pickGroupAttachments(): Promise<Attachment[]> {
     input.multiple = true
     input.onchange = () => resolve(filesToGroupAttachments(input.files))
     input.click()
-  })
-}
-
-/** Bound a group attachment's long edge so room logs (persisted with the
- *  plugin's other durable state) stay light while screenshots keep enough
- *  resolution for vision models to read text. No-op for small images or
- *  anything the canvas can't decode. */
-function normalizeGroupAttachment(dataUrl: string, maxEdge = 1568): Promise<string> {
-  return new Promise(resolve => {
-    const img = new Image()
-
-    img.onload = () => {
-      try {
-        const long = Math.max(img.width, img.height)
-
-        if (!long || long <= maxEdge) {
-          return resolve(dataUrl)
-        }
-
-        const scale = maxEdge / long
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.max(1, Math.round(img.width * scale))
-        canvas.height = Math.max(1, Math.round(img.height * scale))
-        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
-        resolve(canvas.toDataURL('image/png'))
-      } catch {
-        resolve(dataUrl)
-      }
-    }
-
-    img.onerror = () => resolve(dataUrl)
-    img.src = dataUrl
   })
 }

@@ -166,6 +166,63 @@ afterEach(() => {
 })
 
 describe('hosted Group Chat runtime', () => {
+  it('raises attention for a new hosted @user mention but not its replay after acknowledgement', async () => {
+    let mention = false
+
+    const descriptor = {
+      room_id: 'room-1',
+      name: 'Attention',
+      authority_gateway_id: 'install:home',
+      authority_epoch: 1,
+      members: [
+        { member_id: 'research', profile: 'research' },
+        { member_id: 'builder', profile: 'builder' }
+      ]
+    }
+
+    const loaded = await loadRuntime((method, params) => {
+      if (method === 'groups.capabilities')
+        {return { driver: true, persistent_process: true, authority_gateway_id: 'install:home' }}
+
+      if (method === 'groups.list') {return { rooms: [{ ...descriptor, latest_seq: mention ? 1 : 0 }] }}
+
+      if (method === 'groups.state')
+        {return { room: { ...descriptor, latest_seq: mention ? 1 : 0 }, driver_status: { working: false } }}
+
+      if (method === 'groups.log')
+        {return {
+          events:
+            mention && !params.since_seq
+              ? [
+                  hostedEvent(
+                    1,
+                    'mention',
+                    'message.member',
+                    { text: '@user please review', thread_id: 'review' },
+                    { kind: 'member', id: 'builder', profile: 'builder' }
+                  )
+                ]
+              : [],
+          latest_seq: mention ? 1 : 0,
+          has_more: false
+        }}
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    loaded.chat.$groupChats.set({ Attention: room() })
+    loaded.chat.$groupNeedsYou.set({})
+    await loaded.runtime.startHostedRoomRuntime(scriptedStorage(loaded.storage).storage)
+    mention = true
+    await loaded.runtime.refreshHostedRooms()
+    expect(loaded.chat.$groupChats.get().Attention.log[0].text).toBe('@user please review')
+    expect(loaded.chat.$groupNeedsYou.get().Attention).toBe(true)
+    loaded.chat.$groupNeedsYou.set({ Attention: false })
+    await loaded.runtime.refreshHostedRooms()
+    expect(loaded.chat.$groupNeedsYou.get().Attention).toBe(false)
+    loaded.runtime.stopHostedRoomRuntime()
+  })
+
   it('hydrates after local state, reconciles optimistic ids, and replays one contiguous gateway log', async () => {
     const events = [
       hostedEvent(1, 'created-1', 'room.created', {

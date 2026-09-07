@@ -162,6 +162,8 @@ export interface GroupMessageAuthor {
   name: string
   /** Connection label, present when the speaker lives on another machine. */
   source?: string
+  /** Server-owned human actor ID. It does not prove this client authored the message. */
+  hostedUserId?: string
   /** Hosted event actor identity for display binding, never a dispatch route. */
   hostedIdentity?: HostedMessageIdentity
   /** Display-only evidence: weak inheritance or a durable unresolved actor conflict. */

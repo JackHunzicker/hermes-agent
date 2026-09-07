@@ -825,7 +825,8 @@ function messageFromEvent(event: HostedRoomEvent, roomId: null | string): Hosted
     ...(user && (event.roomId || roomId) ? { roomId: (event.roomId || roomId)! } : {}),
     from: {
       kind: user ? 'user' : 'member',
-      name: user ? 'You' : memberLabel(event),
+      name: user ? text(event.actor.display_name) || text(event.actor.id) || 'User' : memberLabel(event),
+      ...(user && event.actor.kind === 'user' && text(event.actor.id) ? { hostedUserId: text(event.actor.id)! } : {}),
       ...(identity ? { hostedIdentity: identity } : {}),
       ...(text(event.actor.connection_id) ? { source: text(event.actor.connection_id) || undefined } : {})
     },

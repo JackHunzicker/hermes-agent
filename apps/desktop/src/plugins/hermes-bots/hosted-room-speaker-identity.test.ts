@@ -45,7 +45,11 @@ describe('hosted speaker identity through replay and display mirrors', () => {
     const event = speakerEvent()
 
     event.kind = 'message.user'
-    expect(speakerReplay([event])[0].from).toEqual({ kind: 'user', name: 'You', source: 'old-device-label' })
+    expect(speakerReplay([event])[0].from).toEqual({
+      kind: 'user',
+      name: event.actor.display_name,
+      source: 'old-device-label'
+    })
   })
 
   it('survives JSON persistence, bounded projection, and a second Desktop merge', async () => {

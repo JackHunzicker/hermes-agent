@@ -27,6 +27,7 @@ import {
   syncHostedRoomApprovals
 } from './hosted-room-approval-state'
 import { stageHostedMessageAttachments } from './hosted-room-attachments-client'
+import { noteHostedRoomMentions } from './hosted-room-attention'
 import { $hostedRoomCapabilities } from './hosted-room-capability-state'
 import {
   addHostedRoomCleanup,
@@ -820,6 +821,7 @@ export async function refreshHostedRooms() {
           sourceLabel
         )
 
+        const previousSeq = $groupChats.get()[localName]?.hostedSeq || 0
         updateGroupChat(
           localName,
           current => {
@@ -891,6 +893,8 @@ export async function refreshHostedRooms() {
         if (stale()) {
           continue connectionLoop
         }
+
+        noteHostedRoomMentions(localName, previousSeq, replay.state.messages)
 
         if (writable) {
           syncHostedRoomApprovals(localName, serverRoom, memberDescriptors, pendingActions)

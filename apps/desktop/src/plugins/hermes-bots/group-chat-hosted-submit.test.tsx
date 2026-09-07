@@ -74,6 +74,32 @@ afterEach(() => {
 })
 
 describe('hosted Group Chat composer durability', () => {
+  it('keeps room and thread drafts isolated when the same workspace switches rooms', async () => {
+    const [{ GroupChatWorkspace }, chat, panes] = await Promise.all([
+      import('./group-chat-view'),
+      import('./group-chat'),
+      import('./group-panes')
+    ])
+
+    const first = { roomId: 'draft-first', log: [], watermarks: {} }
+    const second = { roomId: 'draft-second', log: [], watermarks: {} }
+    const key = panes.groupComposerDraftKey('First', first)
+    panes.updateGroupComposerDraft(key, draft => ({
+      ...draft,
+      main: 'Private first-room draft',
+      activeReplyThread: 'first-thread'
+    }))
+    chat.$groupChats.set({ First: first, Second: second })
+    const view = render(<GroupChatWorkspace group="First" members={MEMBERS} />)
+    expect((screen.getByRole('textbox', { name: 'Message First' }) as HTMLTextAreaElement).value).toBe(
+      'Private first-room draft'
+    )
+    view.rerender(<GroupChatWorkspace group="Second" members={MEMBERS} />)
+    expect((screen.getByRole('textbox', { name: 'Message Second' }) as HTMLTextAreaElement).value).toBe('')
+    expect(panes.groupComposerDraftSnapshot(key).main).toBe('Private first-room draft')
+    expect(panes.groupComposerDraftSnapshot(panes.groupComposerDraftKey('Second', second)).activeReplyThread).toBeNull()
+  })
+
   it.each(['room-1', 'other'])('shows messaging setup only for its pending room: %s', async pendingRoom => {
     const { GroupChatWorkspace } = await import('./group-chat-view')
     const chat = await import('./group-chat')
