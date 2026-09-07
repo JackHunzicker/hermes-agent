@@ -109,6 +109,7 @@ class DiscussionRoom:
     gateway_id: str
     authority_epoch: int
     retired_members: tuple[DiscussionMember, ...] = ()
+    responder_policy: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -310,7 +311,9 @@ def validate_room(value: Any, *, local_profiles: Iterable[str]) -> DiscussionRoo
         raise DiscussionValidationError("invalid retired member roster")
     retired_profiles = {m.get("profile") for m in retired_raw if isinstance(m, Mapping)}
     retired = tuple(_validate_member(m, i, retired_profiles) for i, m in enumerate(retired_raw))
-    return DiscussionRoom(room_id, name, members, gateway_id, authority_epoch, retired)
+    from gateway.hosted_room_responder_policy import DEFAULT_POLICY, normalize_policy
+    policy = normalize_policy(value.get("responder_policy") or DEFAULT_POLICY, members)
+    return DiscussionRoom(room_id, name, members, gateway_id, authority_epoch, retired, policy)
 
 
 def is_pass_text(value: Any) -> bool:
@@ -731,6 +734,9 @@ def _effective_watermarks(
     return watermarks
 
 
+from gateway.hosted_room_responder_policy import responders as _policy_responders
+
+
 def plan_next_task(
     room_value: Any, events: Sequence[Mapping[str, Any]], *, local_profiles: Iterable[str],
     initial_watermarks: Mapping[tuple[str, str], int] | None = None,
@@ -759,7 +765,7 @@ def plan_next_task(
         # watermark remains intact, so a peer cited later still receives the
         # complete bounded transcript delta without consuming turns meanwhile.
         responders = (
-            resolve_mentions((str(discussion.payload["text"]),), room.members) if round_index == 0
+            _policy_responders(str(discussion.payload["text"]), room.members, room.responder_policy) if round_index == 0
             else _unaddressed_member_mentions(discussion_messages, room))
         for member_index, member in enumerate(_rotate(responders, round_index)):
             watermark = watermarks.get((thread_id, member.member_id), 0)

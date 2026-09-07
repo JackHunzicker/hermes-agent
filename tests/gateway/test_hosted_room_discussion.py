@@ -351,7 +351,7 @@ def test_deterministic_task_fits_existing_driver_and_reconstructs_after_restart(
         ("@all inspect this", "research"),
         ("@everyone inspect this", "research"),
         ("inspect this", "research"),
-        ("@unknown inspect this", "research"),
+        ("@unknown inspect this", None),
     ],
 )
 def test_mentions_select_handles_or_everyone(
@@ -362,7 +362,11 @@ def test_mentions_select_handles_or_everyone(
     db, room = room_db
     _append_user(db, event_id="user-1", text=text)
 
-    assert _next_task(room, db).member.profile == expected_profile
+    if expected_profile is None:
+        with pytest.raises(hosted_rooms.HostedRoomError, match="unavailable: @unknown"):
+            _next_task(room, db)
+    else:
+        assert _next_task(room, db).member.profile == expected_profile
 
 
 def test_member_mention_joins_the_next_round_not_the_current_round(

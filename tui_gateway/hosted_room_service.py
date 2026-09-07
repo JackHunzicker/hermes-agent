@@ -1464,6 +1464,8 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
             payload,
             member_ids=member_ids,
         )
+        from gateway.hosted_room_responder_policy import validate_mentions
+        validate_mentions(normalized["text"], room["members"])
         if self._room_is_disbanding(room_id):
             return hosted_rooms.append_event(
                 self.db_path, room_id=room_id, event_id=event_id, kind="message.user",

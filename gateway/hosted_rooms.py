@@ -95,6 +95,7 @@ _SCHEMA_DDL = (
             name TEXT NOT NULL,
             members_json TEXT NOT NULL,
             retired_members_json TEXT NOT NULL DEFAULT '[]',
+            responder_policy_json TEXT NOT NULL DEFAULT '{}',
             authority_gateway_id TEXT NOT NULL,
             authority_epoch INTEGER NOT NULL DEFAULT 1 CHECK (authority_epoch >= 1),
             next_seq INTEGER NOT NULL DEFAULT 1 CHECK (next_seq >= 1),
@@ -164,10 +165,10 @@ _SELECT_EVENT = f"SELECT {_EVENT_COLUMNS} FROM hosted_room_events WHERE room_id=
 _INSERT_EVENT = (f"INSERT INTO hosted_room_events ({_EVENT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
 _ROOM_COLUMNS = (
     "room_id, name, members_json, authority_gateway_id, authority_epoch, next_seq, revision,"
-    " created_at, updated_at, disbanded_at, retired_members_json")
+    " created_at, updated_at, disbanded_at, retired_members_json, responder_policy_json")
 _ROOM_COLUMNS_WITH_BYTES = (
     "room_id, name, members_json, authority_gateway_id, authority_epoch, next_seq, event_bytes,"
-    " revision, created_at, updated_at, disbanded_at, retired_members_json")
+    " revision, created_at, updated_at, disbanded_at, retired_members_json, responder_policy_json")
 _SELECT_ROOM = f"SELECT {_ROOM_COLUMNS} FROM hosted_rooms WHERE room_id=?"
 _SELECT_ROOM_WITH_BYTES = f"SELECT {_ROOM_COLUMNS_WITH_BYTES} FROM hosted_rooms WHERE room_id=?"
 _SUM_EVENT_BYTES = "SELECT COALESCE(SUM(event_bytes), 0) FROM hosted_rooms"
@@ -355,6 +356,8 @@ def _migrate_remote_run_schema(conn: sqlite3.Connection) -> None:
 _LEGACY_ACTOR_JSON = _system_actor_json("legacy").replace("'", "''")
 # (table, column, ddl) applied in this exact order; each table's PRAGMA is read on first use.
 _LEGACY_COLUMN_DDL = (
+    ("hosted_rooms", "responder_policy_json",
+     "ALTER TABLE hosted_rooms ADD COLUMN responder_policy_json TEXT NOT NULL DEFAULT '{}'"),
     ("hosted_rooms", "retired_members_json",
      "ALTER TABLE hosted_rooms ADD COLUMN retired_members_json TEXT NOT NULL DEFAULT '[]'"),
     ("hosted_rooms", "authority_gateway_id",
@@ -492,6 +495,7 @@ def _room_from_row(row: sqlite3.Row, *, idempotent: bool = False) -> dict[str, A
     result = {
         "room_id": row["room_id"], "name": row["name"], "members": json.loads(row["members_json"]),
         "retired_members": json.loads(row["retired_members_json"]) if "retired_members_json" in keys else [],
+        "responder_policy": json.loads(row["responder_policy_json"]) if "responder_policy_json" in keys else {},
         "authority_gateway_id": row["authority_gateway_id"], "authority_epoch": int(row["authority_epoch"]),
         "revision": int(row["revision"]), "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]), "idempotent": idempotent,
@@ -1113,7 +1117,7 @@ def create_room(
             raise HostedRoomError("This host has too many active Group Chats. Delete one and try again.")
         conn.execute(
             f"""INSERT INTO hosted_rooms ({_ROOM_COLUMNS_WITH_BYTES})
-                VALUES (?, ?, ?, ?, 1, 1, 0, 1, ?, ?, NULL, '[]')""",
+                VALUES (?, ?, ?, ?, 1, 1, 0, 1, ?, ?, NULL, '[]', '{{}}')""",
             (room_id, name, members_json, authority_gateway_id, now, now))
         row = _reload(
             conn, """SELECT room_id, name, members_json, authority_gateway_id, authority_epoch, revision,
