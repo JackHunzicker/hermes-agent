@@ -551,9 +551,12 @@ def _format_message(event: _ValidatedEvent, room: DiscussionRoom, *, max_bytes: 
     record = {
         "actor": dict(event.actor), "event_id": event.event_id, "seq": event.seq,
         "room_id": room.room_id, "thread_id": event.payload["thread_id"],
+        "authority_gateway_id": room.gateway_id,
         "content": f"{label}: {event.payload['text']}",
     }
-    encoded = compact_json(record, ensure_ascii=False)
+    # One stored event must remain one physical JSON record in native clients,
+    # including when its body contains Unicode line separators.
+    encoded = compact_json(record, ensure_ascii=True)
     if max_bytes is None or len(encoded.encode("utf-8")) <= max_bytes:
         return encoded
     # Truncate only the content value, never the identity envelope or JSON syntax.
@@ -562,12 +565,12 @@ def _format_message(event: _ValidatedEvent, room: DiscussionRoom, *, max_bytes: 
     while low < high:
         middle = (low + high + 1) // 2
         record["content"] = content[:middle] + " [truncated]"
-        if len(compact_json(record, ensure_ascii=False).encode("utf-8")) <= max_bytes:
+        if len(compact_json(record, ensure_ascii=True).encode("utf-8")) <= max_bytes:
             low = middle
         else:
             high = middle - 1
     record["content"] = content[:low] + " [truncated]"
-    encoded = compact_json(record, ensure_ascii=False)
+    encoded = compact_json(record, ensure_ascii=True)
     return encoded if len(encoded.encode("utf-8")) <= max_bytes else "[Event omitted: identity envelope exceeds remaining budget.]"
 
 
