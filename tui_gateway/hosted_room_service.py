@@ -342,6 +342,24 @@ class HostedRoomService:
             self._peer_renewal_scans.pop(room_id, None)
         return len(routes)
 
+    def begin_room_disband(self, room_id: str) -> dict[str, Any]:
+        """Persist the no-new-work fence before Stop and grant revocation."""
+        with self._policy_lock:
+            room = hosted_rooms.room_state(self.db_path, room_id=room_id)
+            if str(room["authority_gateway_id"]) != hosted_rooms.local_authority_gateway_id():
+                raise hosted_rooms.AuthorityConflictError(
+                    "This Group Chat is managed by another gateway.")
+            hosted_room_link_records.begin_room_link_retirement(
+                self.db_path, room_id=room_id,
+                authority_gateway_id=str(room["authority_gateway_id"]),
+                authority_epoch=int(room["authority_epoch"]))
+            return room
+
+    def _require_work_open(self, room_id: str) -> None:
+        from gateway.hosted_room_route_schema import require_room_work_open
+        with hosted_rooms._transaction(self.db_path, immediate=True) as conn:
+            require_room_work_open(conn, room_id, error=driver.RoomUnavailableError)
+
     def _resolve_member_transport(
         self,
         binding: HostedRoomBinding,
@@ -596,6 +614,8 @@ class HostedRoomService:
             self.policy_checkpoint.compact_completed(room_id=binding.room_id)
             driver.prune_published_terminal_tasks(
                 self.db_path, room_id=binding.room_id, clock=self.runtime.clock)
+            if hosted_room_link_records.room_link_retirement_started(self.db_path, room_id=binding.room_id):
+                return
             if next(iter(self._list_tasks(binding.room_id, _LIVE_STATUSES)), None) is not None:
                 return
             decision = discussion.plan_next_task(
@@ -669,6 +689,7 @@ class HostedRoomService:
 
     def retry_room_task(self, room_id: str, *, task_id: str) -> dict[str, Any]:
         """Retry one uncertain or deferred task only after explicit user action."""
+        self._require_work_open(room_id)
         candidates = self._list_tasks(room_id, _RETRYABLE_STATUSES)
         task = next((c for c in candidates if c["identity"].task_id == task_id), None)
         if task is None:
@@ -694,6 +715,10 @@ class HostedRoomService:
             raise RuntimeError("room approval is no longer pending")
         if choice not in {"once", "deny"}:
             raise RuntimeError("room approval choice must be once or deny")
+        if choice != "deny":
+            # Admit Allow before invoking local/remote approval; an already
+            # admitted request may finish, but no fresh Allow enters after close.
+            self._require_work_open(room_id)
         approve = _hook(client, "approve_receipt")
         if route is not None and approve is not None:
             result = approve(

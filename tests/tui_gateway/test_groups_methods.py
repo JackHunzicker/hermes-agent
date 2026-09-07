@@ -973,6 +973,10 @@ def test_disband_stops_and_revokes_before_tombstoning(home, monkeypatch):
     class FakeService:
         db_path = home / "state.db"
 
+        def begin_room_disband(self, room_id):
+            calls.append(("begin", room_id))
+            return methods_groups.get_hosted_room_service().begin_room_disband(room_id)
+
         def stop_room(self, room_id, **_kwargs):
             calls.append(("stop", room_id))
 
@@ -982,7 +986,7 @@ def test_disband_stops_and_revokes_before_tombstoning(home, monkeypatch):
     monkeypatch.setattr(srv, "get_hosted_room_service", lambda: FakeService())
     _result(srv._methods["groups.disband"](9, {"room_id": "room-1"}))
 
-    assert calls == [("stop", "room-1"), ("revoke", "room-1")]
+    assert calls == [("begin", "room-1"), ("stop", "room-1"), ("revoke", "room-1")]
     assert _result(srv._methods["groups.list"](10, {}))["rooms"] == []
 
 
@@ -991,6 +995,9 @@ def test_failed_remote_revocation_keeps_room_recoverable(home, monkeypatch):
 
     class FakeService:
         db_path = home / "state.db"
+
+        def begin_room_disband(self, room_id):
+            return methods_groups.get_hosted_room_service().begin_room_disband(room_id)
 
         def stop_room(self, _room_id, **_kwargs):
             return 1
@@ -1017,6 +1024,10 @@ def test_disband_does_not_revoke_routes_while_stop_is_unacknowledged(
     class FakeService:
         db_path = home / "state.db"
 
+        def begin_room_disband(self, room_id):
+            calls.append(("begin", True))
+            return methods_groups.get_hosted_room_service().begin_room_disband(room_id)
+
         def stop_room(self, _room_id, **kwargs):
             calls.append(("stop", kwargs["require_acknowledged"]))
             raise RuntimeError("room work is still stopping")
@@ -1028,7 +1039,7 @@ def test_disband_does_not_revoke_routes_while_stop_is_unacknowledged(
     result = srv._methods["groups.disband"](13, {"room_id": "room-1"})
 
     assert result["error"]["code"] == 5114
-    assert calls == [("stop", True)]
+    assert calls == [("begin", True), ("stop", True)]
     assert [
         room["room_id"]
         for room in _result(srv._methods["groups.list"](14, {}))["rooms"]
