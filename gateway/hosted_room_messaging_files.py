@@ -260,7 +260,7 @@ class FilesMenu:
                     caption = f"{icon} {caption}"
             token = f"{self.handle}:{self.revision}:{len(choices)}"
             self.actions[token] = action
-            choices.append({"label": caption, "value": token, "full_width": full_width})
+            choices.append({"label": caption, "value": token, "full_width": full_width or action[0] == "compose"})
         return ChoicePage(title[:2048], choices)
 
     def failure(self, exc, action):

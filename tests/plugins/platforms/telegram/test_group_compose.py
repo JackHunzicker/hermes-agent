@@ -71,8 +71,13 @@ async def open_compose(state):
     await menu.bind("1")
     page = await menu.room_page()
     assert page.choices[0]["label"] == text("send")
+    assert page.choices[0]["full_width"] is True
+    assert all(not choice["full_width"] for choice in page.choices[1:])
     assert len(page.choices) <= 12
     assert await menu.send_page(page)
+    rows = state.outgoing[-1][0]["reply_markup"].inline_keyboard
+    assert len(rows[0]) == 1 and rows[0][0].text == text("send")
+    assert len(rows[1]) == 2
     picker = state.adapter._choice_picker_state["100"]
     from gateway.choice_picker import choice_action
     callback = choice_action(picker["token"], picker["revision"], 0)

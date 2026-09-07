@@ -110,6 +110,22 @@ async def test_next_back_same_message_and_old_revision_refused(adapter):
 
 
 @pytest.mark.asyncio
+async def test_mixed_full_width_rows_preserve_order_and_callback_values(adapter):
+    choices = [
+        {"label": label, "value": label, "full_width": wide}
+        for label, wide in [("First", False), ("Standalone", True), ("Third", False), ("Fourth", False), ("Last", True)]
+    ]
+    callback = AsyncMock(return_value="done")
+    await send(adapter, callback, choices=choices)
+    rows = adapter._send_message_with_thread_fallback.await_args.kwargs["reply_markup"].inline_keyboard
+    assert [[button.text for button in row] for row in rows] == [
+        ["First"], ["Standalone"], ["Third", "Fourth"], ["Last"],
+    ]
+    await adapter._handle_choice_picker_callback(_query(), rows[2][1].callback_data, "chat-1")
+    callback.assert_awaited_once_with("chat-1", "Fourth")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reusable", [False, True])
 async def test_double_tap_claims_before_ack_and_callback(adapter, reusable):
     entered, release = asyncio.Event(), asyncio.Event()

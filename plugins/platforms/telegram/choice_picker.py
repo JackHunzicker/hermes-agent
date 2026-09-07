@@ -30,8 +30,21 @@ def _keyboard(choices, token, revision, button, markup):
             label = f"✓ {label}"
         action = choice_action(token, revision, i) if token else f"cp:{i}"
         buttons.append(button(label, callback_data=action))
-    row_size = 1 if any(choice.get("full_width") for choice in choices) else 2
-    return markup([buttons[i : i + row_size] for i in range(0, len(buttons), row_size)])
+    rows, row = [], []
+    for choice, button in zip(choices, buttons):
+        if choice.get("full_width"):
+            if row:
+                rows.append(row)
+                row = []
+            rows.append([button])
+        else:
+            row.append(button)
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+    if row:
+        rows.append(row)
+    return markup(rows)
 
 
 def _remove(adapter, chat_id, state):
