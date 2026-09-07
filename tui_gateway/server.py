@@ -1760,7 +1760,7 @@ def _gui_surface_toolsets(platform: str) -> set[str]:
     """Toolsets that exist because of the CLIENT (both off ``_HERMES_CORE_TOOLS``; this is the one gate).
     ``platform`` is the SESSION's source, never a process env var: the desktop may drive a URL/cloud
     backend where ``HERMES_DESKTOP`` is unset (AGENTS.md surface rule)."""
-    return {"project", "desktop_ui"} if platform == "desktop" else {"project"}
+    return {"project"} | {"desktop": {"desktop_ui"}, "bot_room": {"bot_room"}}.get(platform, set())
 
 
 def _tui_notice(text: str) -> None:
@@ -1829,7 +1829,7 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
     if explicit and validate_toolset is not None:
         resolved = _resolve_explicit_toolsets(explicit, validate_toolset)
         if resolved is not False:
-            return resolved
+            return sorted({*resolved, "bot_room"}) if resolved is not None and session_platform == "bot_room" else resolved
         fallback_notice = "[tui] no valid HERMES_TUI_TOOLSETS entries; using configured CLI toolsets"
     try:
         from hermes_cli.config import load_config
