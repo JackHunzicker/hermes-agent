@@ -1454,6 +1454,9 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
         authority = expected_authority
         if authority is None:
             authority = (str(room["authority_gateway_id"]), int(room["authority_epoch"]))
+        from gateway.hosted_room_thread_refs import resolve_reply_payload
+        with hosted_rooms._transaction(self.db_path) as conn:
+            payload = resolve_reply_payload(conn, room_id=room_id, payload=payload)
         member_ids = tuple(
             str(member.get("member_id") or member.get("profile") or "")
             for member in room["members"]

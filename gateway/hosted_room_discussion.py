@@ -204,7 +204,8 @@ def _all_failure_reasons() -> frozenset[str]:
 
 def validate_user_payload(value: Any, *, member_ids: Iterable[str] | None = None) -> dict[str, Any]:
     """Validate and normalize the exact ``message.user`` Discussion payload."""
-    payload = _exact_fields(value, label="user payload", required=_USER_PAYLOAD_FIELDS, optional={"attachments"})
+    payload = _exact_fields(value, label="user payload", required=_USER_PAYLOAD_FIELDS,
+                            optional={"attachments", "parent_event_id"})
     text = payload["text"]
     if not isinstance(text, str):
         raise DiscussionValidationError("user payload text must be a string")
@@ -214,6 +215,8 @@ def validate_user_payload(value: Any, *, member_ids: Iterable[str] | None = None
     if len(text.encode("utf-8")) > MAX_USER_TEXT_BYTES:
         raise DiscussionValidationError("user payload text is too large")
     normalized = {"text": text, "thread_id": _identifier(payload["thread_id"], label="thread_id")}
+    if "parent_event_id" in payload:
+        normalized["parent_event_id"] = _identifier(payload["parent_event_id"], label="parent_event_id")
     if "attachments" in payload:
         normalized["attachments"] = _validate_attachments(payload["attachments"], member_ids=member_ids)
     return normalized
