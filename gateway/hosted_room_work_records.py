@@ -22,6 +22,7 @@ MAX_STORE_ROWS = 512
 SOURCE_TABLE = "hosted_room_work_records_source"
 TARGET_TABLE = "hosted_room_work_records_target"
 PENDING_TABLE = "hosted_room_work_records_pending"
+BLOCKED_DELIVERY_STATUSES = {"rejected", "needs_reauthorization", "invalid_ack"}
 LIMITATIONS = ["process_local_approvals_not_captured", "field_journals_not_captured",
                "external_effects_not_captured", "absent_record_is_not_non_admission", "not_execution_checkpoint"]
 _PHASES = {"queued", "running", "indeterminate", "stopping", "deferred", "settled", "failed", "cancelled"}
@@ -314,41 +315,50 @@ def _validate_roster(record, members):
 
 
 def ingest(db_path, *, record: dict, token: str, secret: bytes, target_install_id: str, target_profile: str) -> dict:
-    from gateway.hosted_room_replica_ingress import authorize_granted_room
+    from gateway import hosted_room_replicas as replicas
     checked = validate(record)
-    with rooms._transaction(db_path, immediate=True) as conn:
-        initialize(conn)
-        room_id = checked["room_id"]
-        row = conn.execute("SELECT * FROM hosted_room_replicas WHERE room_id=?", (room_id,)).fetchone()
-        if (row is None or row["quarantine_reason"] is not None or row["disbanded_at"] is not None
-                or copy_retired_locked(conn, room_id)
-                or conn.execute("SELECT 1 FROM hosted_room_quarantine WHERE room_id=?", (room_id,)).fetchone()
-                or conn.execute("SELECT 1 FROM hosted_rooms WHERE room_id=?", (room_id,)).fetchone()):
-            raise WorkRecordError("passive work record target is unavailable")
-        members = json.loads(row["members_json"])
-        authorize_granted_room(
-            token=token, secret=secret, target_install_id=target_install_id, target_profile=target_profile,
-            room_id=room_id, members=members, authority=checked["authority"], permission=PERMISSION,
-        )(conn)
-        if checked["authority"] != {"gateway_id": row["authority_gateway_id"], "epoch": row["authority_epoch"]}:
-            raise WorkRecordError("work record lineage conflicts")
-        _validate_roster(checked, members)
-        prefix = checked["history"]
-        if prefix["seq"] > row["last_seq"] or prefix["event_sha256"] != history_anchor(
-            conn, "hosted_room_replica_events", room_id, prefix["seq"],
-        ):
-            raise WorkRecordPrefixError("work record history prefix conflicts")
-        old = conn.execute(f"SELECT * FROM {TARGET_TABLE} WHERE room_id=?", (room_id,)).fetchone()
-        if old is not None:
-            previous = json.loads(old["record_json"])
-            if checked["revision"] < old["revision"] or (checked["revision"] == old["revision"] and checked["digest"] != old["digest"]):
-                raise WorkRecordError("work record revision conflicts")
-            if prefix["seq"] < previous["history"]["seq"]:
-                raise WorkRecordError("work record history regresses")
-        data = encode(checked)
-        _budget(conn, TARGET_TABLE, room_id, data)
-        conn.execute(f"INSERT OR REPLACE INTO {TARGET_TABLE} VALUES (?,?,?,?)",
-                     (room_id, checked["revision"], checked["digest"], data))
+    with replicas._replica_transaction(db_path) as conn:
+        row = conn.execute("SELECT * FROM hosted_room_replicas WHERE room_id=?", (checked["room_id"],)).fetchone()
+        if row is None or row["quarantine_reason"] is None:
+            return _ingest_audited_locked(conn, checked=checked, row=row, token=token, secret=secret,
+                                          target_install_id=target_install_id, target_profile=target_profile)
+        # Commit the existing auditor's quarantine, not a metadata write. Raising
+        # inside the transaction would roll back that newly discovered evidence.
+    raise WorkRecordError("passive work record target is quarantined")
+
+
+def _ingest_audited_locked(conn, *, checked, row, token, secret, target_install_id, target_profile):
+    from gateway.hosted_room_replica_ingress import authorize_granted_room
+    initialize(conn)
+    room_id = checked["room_id"]
+    if (row is None or row["disbanded_at"] is not None or copy_retired_locked(conn, room_id)
+            or conn.execute("SELECT 1 FROM hosted_room_quarantine WHERE room_id=?", (room_id,)).fetchone()
+            or conn.execute("SELECT 1 FROM hosted_rooms WHERE room_id=?", (room_id,)).fetchone()):
+        raise WorkRecordError("passive work record target is unavailable")
+    members = json.loads(row["members_json"])
+    authorize_granted_room(
+        token=token, secret=secret, target_install_id=target_install_id, target_profile=target_profile,
+        room_id=room_id, members=members, authority=checked["authority"], permission=PERMISSION,
+    )(conn)
+    if checked["authority"] != {"gateway_id": row["authority_gateway_id"], "epoch": row["authority_epoch"]}:
+        raise WorkRecordError("work record lineage conflicts")
+    _validate_roster(checked, members)
+    prefix = checked["history"]
+    if prefix["seq"] > row["last_seq"] or prefix["event_sha256"] != history_anchor(
+        conn, "hosted_room_replica_events", room_id, prefix["seq"],
+    ):
+        raise WorkRecordPrefixError("work record history prefix conflicts")
+    old = conn.execute(f"SELECT * FROM {TARGET_TABLE} WHERE room_id=?", (room_id,)).fetchone()
+    if old is not None:
+        previous = json.loads(old["record_json"])
+        if checked["revision"] < old["revision"] or (checked["revision"] == old["revision"] and checked["digest"] != old["digest"]):
+            raise WorkRecordError("work record revision conflicts")
+        if prefix["seq"] < previous["history"]["seq"]:
+            raise WorkRecordError("work record history regresses")
+    data = encode(checked)
+    _budget(conn, TARGET_TABLE, room_id, data)
+    conn.execute(f"INSERT OR REPLACE INTO {TARGET_TABLE} VALUES (?,?,?,?)",
+                 (room_id, checked["revision"], checked["digest"], data))
     return {"room_id": room_id, "revision": checked["revision"], "digest": checked["digest"], "passive": True}
 
 
@@ -363,7 +373,7 @@ def prepare_delivery_locked(conn, *, room_id, target_install_id, route_generatio
     key = (room_id, target_install_id)
     old = conn.execute(f"SELECT * FROM {PENDING_TABLE} WHERE room_id=? AND target_install_id=?", key).fetchone()
     if old is not None and old["status"] != "acked":
-        if old["route_generation"] == route_generation and old["status"] in {"rejected", "needs_reauthorization", "invalid_ack"}:
+        if old["route_generation"] == route_generation and old["status"] in BLOCKED_DELIVERY_STATUSES:
             return None
         record = validate(json.loads(old["record_json"]))
         current = conn.execute("SELECT authority_gateway_id,authority_epoch,members_json FROM hosted_rooms WHERE room_id=?", (room_id,)).fetchone()
@@ -385,9 +395,9 @@ def prepare_delivery_locked(conn, *, room_id, target_install_id, route_generatio
 
 
 def delivery_status_locked(conn, *, room_id, target_install_id, route_generation, record, status):
-    conn.execute(f"""UPDATE {PENDING_TABLE} SET status=? WHERE room_id=? AND target_install_id=?
+    return conn.execute(f"""UPDATE {PENDING_TABLE} SET status=? WHERE room_id=? AND target_install_id=?
         AND route_generation=? AND revision=? AND digest=?""",
-                 (status, room_id, target_install_id, route_generation, record["revision"], record["digest"]))
+                        (status, room_id, target_install_id, route_generation, record["revision"], record["digest"])).rowcount == 1
 
 
 def delivery_summaries_locked(conn, room_id=None):

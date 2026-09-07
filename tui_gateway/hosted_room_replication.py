@@ -131,6 +131,13 @@ class HostedRoomReplicationPublisher:
                 pending_end INTEGER, pending_latest INTEGER, pending_name TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', updated_at REAL NOT NULL,
                 PRIMARY KEY(room_id, member_id))""")
+            if "work_record_status" not in {row["name"] for row in conn.execute(f"PRAGMA table_info({_TABLE})")}:
+                conn.execute(f"ALTER TABLE {_TABLE} ADD COLUMN work_record_status TEXT NOT NULL DEFAULT 'pending'")
+                if table_exists(conn, work_records.PENDING_TABLE):
+                    conn.execute(f"""UPDATE {_TABLE} SET work_record_status=COALESCE((
+                        SELECT p.status FROM {work_records.PENDING_TABLE} AS p
+                        WHERE p.room_id={_TABLE}.room_id AND p.target_install_id={_TABLE}.target_install_id
+                          AND p.route_generation={_TABLE}.generation), 'pending')""")
             conn.execute(f"""CREATE TABLE IF NOT EXISTS {_TARGET_TABLE} (
                 room_id TEXT NOT NULL, target_install_id TEXT NOT NULL, lineage TEXT NOT NULL,
                 selected_member_id TEXT NOT NULL, acked_seq INTEGER NOT NULL DEFAULT 0,
@@ -325,7 +332,7 @@ class HostedRoomReplicationPublisher:
                 target_install_id=excluded.target_install_id, target_profile=excluded.target_profile,
                 authority_gateway_id=excluded.authority_gateway_id, authority_epoch=excluded.authority_epoch,
                 acked_seq=0, source_latest_seq=0, pending_end=NULL, pending_latest=NULL,
-                pending_name=NULL, status='pending', updated_at=excluded.updated_at
+                pending_name=NULL, status='pending', work_record_status='pending', updated_at=excluded.updated_at
                 WHERE generation!=excluded.generation""", (
                     *route.key, route.generation, route.link.catalog.installation_id, route.link.target_profile,
                     route.room["authority_gateway_id"], route.room["authority_epoch"], time.time(),
@@ -365,8 +372,12 @@ class HostedRoomReplicationPublisher:
                 "SELECT * FROM hosted_room_links WHERE room_id=? ORDER BY member_id LIMIT ?",
                 (initial.key[0], links.MAX_LINKS),
             ).fetchall()
+            target = conn.execute(f"SELECT * FROM {_TARGET_TABLE} WHERE room_id=? AND target_install_id=?",
+                                  (initial.key[0], initial.link.catalog.installation_id)).fetchone()
         selected = []
         room = rooms.room_state(self.db_path, room_id=initial.key[0], include_disbanded=True)
+        history_needed = (target is None or target["pending_end"] is not None
+                          or target["acked_seq"] < room["latest_seq"] or target["status"] != "acked")
         for raw in candidates:
             if not _replication_hint(raw["grant"]):
                 continue
@@ -380,8 +391,13 @@ class HostedRoomReplicationPublisher:
             checkpoint = self._checkpoint(route)
             if checkpoint is not None and checkpoint["status"] not in _BLOCKED:
                 opted_in = work_records.PERMISSION in _replication_hint(link.grant).get("permissions", ())
-                selected.append((checkpoint["status"] == "unavailable", not opted_in, route.key, route))
-        return min(selected, key=lambda item: item[:3])[3] if selected else None
+                refused = checkpoint["work_record_status"] in work_records.BLOCKED_DELIVERY_STATUSES
+                work_rank = 2 if opted_in and refused else 0 if opted_in else 1
+                unavailable = checkpoint["status"] == "unavailable"
+                work_unavailable = checkpoint["work_record_status"] == "unavailable"
+                rank = (unavailable, work_rank, work_unavailable) if history_needed else (work_rank, work_unavailable, unavailable)
+                selected.append((*rank, route.key, route))
+        return min(selected, key=lambda item: item[:4])[4] if selected else None
 
     def _target_checkpoint(self, route: _Route) -> dict | None:
         lineage = _digest([route.room["authority_gateway_id"], route.room["authority_epoch"], route.room["members"]])
@@ -500,6 +516,10 @@ class HostedRoomReplicationPublisher:
             with self._transaction() as conn:
                 if not self._current(conn, route):
                     return False
+                state = conn.execute(f"SELECT work_record_status FROM {_TABLE} WHERE room_id=? AND member_id=? AND generation=?",
+                                     (*route.key, route.generation)).fetchone()
+                if state is None or state[0] in work_records.BLOCKED_DELIVERY_STATUSES:
+                    return False
                 record = work_records.prepare_delivery_locked(
                     conn, room_id=route.key[0], target_install_id=route.link.catalog.installation_id,
                     route_generation=route.generation, local_gateway_id=self.local_id, through_seq=checkpoint["acked_seq"])
@@ -522,9 +542,12 @@ class HostedRoomReplicationPublisher:
                     status = "rejected"
             with self._transaction() as conn:
                 if self._current(conn, route):
-                    work_records.delivery_status_locked(
+                    saved = work_records.delivery_status_locked(
                         conn, room_id=route.key[0], target_install_id=route.link.catalog.installation_id,
                         route_generation=route.generation, record=record, status=status)
+                    if saved:
+                        conn.execute(f"UPDATE {_TABLE} SET work_record_status=? WHERE room_id=? AND member_id=? AND generation=?",
+                                     (status, *route.key, route.generation))
             if prefix_gap:
                 self._save(route, checkpoint, acked_seq=0, pending_end=None, pending_latest=None, pending_name=None, status="replica_gap")
             self._work_record_error = None
@@ -556,7 +579,7 @@ class HostedRoomReplicationPublisher:
                 has_retirement = table_exists(conn, retirement.HOME_TABLE)
                 record_deliveries = work_records.delivery_summaries_locked(conn, room_id)
                 rows = conn.execute(f"""SELECT r.room_id, member_id, r.target_install_id, target_profile,
-                    authority_gateway_id, authority_epoch, r.acked_seq, r.source_latest_seq, r.status, r.updated_at,
+                    authority_gateway_id, authority_epoch, r.acked_seq, r.source_latest_seq, r.status, r.updated_at, r.work_record_status,
                     t.selected_member_id, t.acked_seq AS target_acked_seq, t.status AS target_status,
                     t.source_latest_seq AS target_source_latest_seq
                     FROM {_TABLE} AS r LEFT JOIN {_TARGET_TABLE} AS t
