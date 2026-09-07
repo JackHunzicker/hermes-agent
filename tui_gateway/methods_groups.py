@@ -259,7 +259,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
             "authority_epoch", "coordinator_fencing", "room_identity", "monotonic_log",
             "desktop_compatibility_mailbox", "reciprocal_room_control", "reciprocal_room_control_setup",
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity", "peer_route_grant_fingerprint",
-            "peer_grant_renewal", "local_membership_revision", "historical_member_identity",
+            "peer_grant_renewal", "local_membership_revision", "historical_member_identity", "rename_revision",
             ] + (["authenticated_replication", "replica_retirement"] if room_link.get("enabled") else []),
         "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
 
@@ -617,7 +617,7 @@ def _passthrough(
 _passthrough(
     "groups.rename", "gateway.hosted_rooms", "rename_room",
     """Rename one hosted room atomically with its replay event.""",
-    code=5117, room_code=4117, params=("room_id", "event_id", "name"), wrap="room")
+    code=5117, room_code=4117, params=("room_id", "event_id", "name", "expected_revision"), wrap="room")
 _passthrough(
     "groups.log", "gateway.hosted_rooms", "read_events",
     """Return a monotonic room-log delta after ``since_seq``.""",

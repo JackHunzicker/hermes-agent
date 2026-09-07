@@ -1137,14 +1137,18 @@ def list_rooms(
     return [_room_from_row(row) for row in rows]
 
 
-def rename_room(db_path: DbPath, *, room_id: Any, event_id: Any, name: Any, now: float | None = None) -> dict[str, Any]:
+def rename_room(db_path: DbPath, *, room_id: Any, event_id: Any, name: Any, now: float | None = None,
+                expected_revision: int | None = None) -> dict[str, Any]:
     """Rename a live room and append its replay event atomically."""
     room_id = _room_id(room_id)
     event_id = _event_id(event_id)
     name = _validate_room_name(name)
     now = _now(now)
     actor_json = _system_actor_json("room-control")
-    payload_json = _payload_json({"name": name})
+    if expected_revision is not None:
+        _require_positive_int(expected_revision, "expected_revision")
+    payload_json = _payload_json({"name": name, **(
+        {"expected_revision": expected_revision} if expected_revision is not None else {})})
     with _transaction(db_path, immediate=True) as conn:
         room_safety._raise_if_quarantined(conn, room_id)
         room = _room_row(conn, _SELECT_ROOM_WITH_BYTES, (room_id,), room_id)
@@ -1155,6 +1159,8 @@ def rename_room(db_path: DbPath, *, room_id: Any, event_id: Any, name: Any, now:
             if existing["kind"] != "room.renamed" or existing["payload_json"] != payload_json:
                 raise EventConflictError("event_id already exists with different immutable content")
             return {**_room_from_row(room, idempotent=True), "event": _event_from_row(existing, idempotent=True)}
+        if expected_revision is not None and int(room["revision"]) != expected_revision:
+            raise RoomConflictError("room revision changed; reload before renaming")
         seq = int(room["next_seq"])
         event_bytes = _prepare_event(conn, room, event_id, "room.renamed", actor_json, payload_json)
         # Rename updates the room row before inserting its event (order is load-bearing).
