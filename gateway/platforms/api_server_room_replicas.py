@@ -45,6 +45,12 @@ def http_routes(adapter):
             )
         except HostedRoomGrantError as exc:
             return _room_grant_error_response(exc, _openai_error=api_server._openai_error)
+        except replicas.ReplicaCapacityError:
+            return web.json_response(
+                api_server._openai_error(
+                    "Group Chat history storage is full on this gateway.", code="room_replica_storage_full",
+                ), status=507,
+            )
         except replicas.ReplicaError as exc:
             code = "room_replica_gap" if isinstance(exc, replicas.ReplicaGapError) else "invalid_room_replica"
             return web.json_response(

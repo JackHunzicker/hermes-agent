@@ -56,6 +56,10 @@ class ReplicaGapError(ReplicaError):
     """A page does not start at the replica's next expected sequence."""
 
 
+class ReplicaCapacityError(ReplicaError):
+    """Copying may resume after space or a replica slot becomes available."""
+
+
 class ReplicaHistoryExpiredError(ReplicaError):
     """A compacted replica keeps its identity but no longer has replay data."""
 
@@ -428,7 +432,7 @@ def ingest_page(
                 "SELECT COUNT(*) FROM hosted_room_replicas"
             ).fetchone()[0]
             if int(count) >= MAX_REPLICA_ROOMS:
-                raise ReplicaError("replica room capacity exhausted")
+                raise ReplicaCapacityError("replica room capacity exhausted")
             stored_epoch = 0
             last_seq = 0
             stored_latest = 0
@@ -547,7 +551,7 @@ def ingest_page(
                 ).fetchone()[0]
             )
         if gateway_bytes + added_bytes > MAX_REPLICA_EVENT_BYTES:
-            raise ReplicaError("replica event storage exhausted")
+            raise ReplicaCapacityError("replica event storage exhausted")
         for event in new_events:
             conn.execute(
                 """INSERT INTO hosted_room_replica_events
