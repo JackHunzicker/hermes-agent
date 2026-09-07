@@ -441,7 +441,7 @@ export function GroupClarifyCard({ entry, members }: GroupClarifyCardProps) {
       // Hosted rooms replay one authoritative gateway log. The approval RPC
       // currently emits no room event, so do not invent a Desktop-only entry
       // that another client cannot observe or order.
-      if (!entry.hostedApproval) {
+      if (!entry.hostedApproval && !entry.hostedInput) {
         appendGroupChatEntry(
           group,
           {

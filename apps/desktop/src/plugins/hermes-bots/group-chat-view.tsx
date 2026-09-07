@@ -104,7 +104,11 @@ import {
 import type { GroupComposerDraft, GroupDraftSetter } from './group-panes'
 import { sendToGroupChatDurably, stopGroupThread } from './group-rounds'
 import { clearGroupClarify } from './group-turns'
+import { $hostedRoomCapabilities } from './hosted-room-capability-state'
 import { $hostedRoomCleanup } from './hosted-room-cleanup'
+import type { HostedHistory } from './hosted-room-history'
+import { HostedHistoryToolbar, HostedThreadActions } from './hosted-room-history-controls'
+import { HostedMessageActions } from './hosted-room-message-actions'
 import { reconnectHostedGroupChatPeer } from './hosted-room-reauthorization'
 import {
   beginHostedRoomMutation,
@@ -600,6 +604,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
   const b = useBots()
   const rooms: Record<string, GroupChatRoom> = useValue($groupChats)
   const allMeta: Record<string, BotMeta> = useValue($botMeta)
+  const capabilities = useValue($hostedRoomCapabilities)
+  const capability = capabilities[rooms[group]?.hostedConnectionId || '']
 
   const room: GroupChatRoom = rooms[group] || {
     log: [],
@@ -611,6 +617,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
   const canStop = Boolean(room.running && hostedState !== 'stopping' && room.hostedStatus?.canStop !== false)
 
   const composerKey = groupComposerDraftKey(group, room)
+  const [search, setSearch] = useState<{ scope: string; result: HostedHistory } | null>(null)
+  const searchResult = search?.scope === composerKey ? search.result : null
   const composerKeyRef = useRef(composerKey)
   const [composerDraft, setComposerDraft] = useState(() => groupComposerDraftSnapshot(composerKey))
 
@@ -925,7 +933,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
       return
     }
 
-    await stopGroupThread(group, latestActivity?.thread || null, memberDescriptors())
+    await stopGroupThread(group, groupChatHostedGateway(room) ? null : latestActivity?.thread || null, memberDescriptors())
     host.notify({
       kind: 'success',
       message: b.group.stopped(group)
@@ -1204,7 +1212,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
 
   // One log entry, rendered exactly as before conversation folding existed.
   const renderEntry = (entry: GroupMessage, index: number) => {
-    const projection = entry.eventId ? room.hostedHistory?.messages[entry.eventId] : undefined
+    const projection = entry.eventId ? searchResult?.messages[entry.eventId] || room.hostedHistory?.messages[entry.eventId] : undefined
     const currentText = projection ? projection.deleted ? 'Message deleted' : projection.text || '' : entry.text
     const isUser = entry.from.kind === 'user'
     const hostedSpeaker = hostedMessageSpeaker(entry.from, room, members)
@@ -1313,6 +1321,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
             {Streamdown ? <Streamdown>{currentText}</Streamdown> : currentText}
           </div>
           {projection?.reactions.map(reaction => <span className="mr-2 text-xs text-(--ui-text-secondary)" key={reaction.reaction}>{reaction.reaction} {reaction.actors.length}</span>)}
+          {projection ? <HostedMessageActions capability={capability} group={group} key={`${room.roomId}:${projection.event_id}`} message={projection} /> : null}
           {/* User attachments: what every responding bot was */
           /* shown — image previews, or a named chip for */
           /* PDFs/files. */}
@@ -1353,6 +1362,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
 
   for (let i = 0; i < room.log.length; i++) {
     const entry = room.log[i]
+
+    if (searchResult && (!entry.eventId || !searchResult.messages[entry.eventId])) {continue}
     const id = groupThreadOf(entry)
     let bucket = threadsById.get(id)
 
@@ -1381,11 +1392,12 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
     const { entries, id } = threadBucket
     const head = entries.find(({ entry }) => entry.from.kind === 'user')?.entry || entries[0].entry
     const isNewest = id === newestThread
-    const expanded = openThreads[id] ?? isNewest
+    const expanded = Boolean(searchResult) || (openThreads[id] ?? isNewest)
 
     if (!expanded) {
       const replies = groupThreadReplyCount(room.log || [], id)
-      const headText = stripPreviewMarkdown(head?.text || '').slice(0, 80)
+      const projectedHead = head?.eventId ? room.hostedHistory?.messages[head.eventId] : undefined
+      const headText = stripPreviewMarkdown(projectedHead ? projectedHead.deleted ? 'Message deleted' : projectedHead.text || '' : head?.text || '').slice(0, 80)
       logChildren.push(
         <RowButton
           className="flex w-full items-center gap-2 rounded-md border border-(--ui-stroke-secondary) px-2 py-1.5 text-left text-xs text-(--ui-text-tertiary) transition-colors hover:bg-(--chrome-action-hover)"
@@ -1433,6 +1445,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
     for (const { entry, index } of entries) {
       threadRows.push(renderEntry(entry, index))
     }
+
+    if (room.hostedHistory) {threadRows.push(<HostedThreadActions capability={capability} group={group} key={`${room.roomId}:${id}:controls`} thread={id} throughSeq={room.hostedHistory.snapshotSeq} />)}
 
     // Reply-in-thread: the newest thread's continuation ALSO lives here, so
     // the main composer below can stay "new thread" without ambiguity.
@@ -1521,6 +1535,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
         </div>
       ) : null}
       {header}
+      <HostedHistoryToolbar capability={capability} group={group} key={composerKey} onResults={result => setSearch(result ? { scope: composerKey, result } : null)} room={room} />
+      {searchResult ? <div className="px-2.5 text-xs text-(--ui-text-secondary)">{Object.keys(searchResult.messages).length} matching messages</div> : null}
       <GroupHoldStatus
         holds={room.holds}
         memberLabel={member => displayName(member, botRosterMeta(member, allMeta))}

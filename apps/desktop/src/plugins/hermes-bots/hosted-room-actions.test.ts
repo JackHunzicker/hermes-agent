@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { atom } from 'nanostores'
+
 import { pluginSdkMock } from './group-test-utils'
 const { request, route, rooms, capabilities } = vi.hoisted(() => ({ request: vi.fn(), route: vi.fn(), rooms: { get: vi.fn(), set: vi.fn() }, capabilities: { get: vi.fn() } }))
 vi.mock('@hermes/plugin-sdk', async () => pluginSdkMock({}))
@@ -7,7 +7,7 @@ vi.mock('./group-chat', () => ({ $groupChats: rooms, groupChatHostedGateway: (ro
 vi.mock('./hosted-room-runtime', () => ({ hostedRouteForRoom: route, refreshHostedRooms: vi.fn() }))
 vi.mock('./hosted-room-transport', () => ({ requestHostedConnection: request }))
 vi.mock('./hosted-room-capability-state', () => ({ $hostedRoomCapabilities: capabilities }))
-import { mutateHostedMessage, markHostedRead, stopHostedScope } from './hosted-room-actions'
+import { markHostedRead, mutateHostedMessage, stopHostedScope } from './hosted-room-actions'
 
 beforeEach(() => {
   request.mockReset().mockResolvedValue({})
@@ -17,6 +17,13 @@ beforeEach(() => {
 })
 
 describe('canonical room actions', () => {
+  it('answers the exact hosted input request without using member-session clarify.respond', async () => {
+    const { respondHostedInput } = await import('./hosted-room-actions')
+    capabilities.get.mockReturnValue({ home: { methods: ['groups.input.respond'], features: ['scoped_input_v1'] } })
+    await respondHostedInput('Board', { roomId: 'room', memberId: 'member', threadId: 'thread', taskId: 'task', executionGeneration: 3 }, 'request', ' answer\n', 'command', 'question')
+    expect(request).toHaveBeenCalledExactlyOnceWith({ connectionId: 'home' }, 'groups.input.respond', { room_id: 'room', member_id: 'member', thread_id: 'thread', task_id: 'task', execution_generation: 3, request_id: 'request', answer: ' answer\n', command_id: 'command', question_id: 'question' })
+  })
+
   it('sends revision-checked edits with exact text and canonical read bounds', async () => {
     await mutateHostedMessage('Board', 'edit', { event_id: 'command', target_event_id: 'source', expected_revision: 9, text: '  new\n' })
     expect(request).toHaveBeenCalledWith({ connectionId: 'home' }, 'groups.message.edit', { room_id: 'room', event_id: 'command', target_event_id: 'source', expected_revision: 9, text: '  new\n' })

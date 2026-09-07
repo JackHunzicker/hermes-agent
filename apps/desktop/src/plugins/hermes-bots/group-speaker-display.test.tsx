@@ -73,6 +73,7 @@ describe('room speaker click and sidebar preview', () => {
     room.hostedHistory.messages[message.eventId!].text = null
     await show(room)
     expect(screen.getByText('Message deleted', { exact: true })).toBeTruthy()
+    expect(document.body.textContent).not.toContain(message.text)
     expect(screen.queryByText('Current edited content', { exact: true })).toBeNull()
     expect(room.log[0].text).toBe(message.text)
   })

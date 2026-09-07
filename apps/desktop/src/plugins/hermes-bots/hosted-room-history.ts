@@ -47,20 +47,26 @@ export async function readHostedHistory(request: HostedHistoryRequest, roomId: s
   const messages: HostedHistory['messages'] = {}
   let cursor = 0
   let snapshot: number | undefined
+
   for (let page = 0; page < 100; page++) {
     const result = await request(query === undefined ? 'groups.history' : 'groups.history.search', {
       room_id: roomId, after_seq: cursor, limit: 100,
       ...(snapshot === undefined ? {} : { snapshot_seq: snapshot }),
       ...(query === undefined ? {} : { query })
     }) as HistoryPage
+
     if (!Array.isArray(result?.messages) || !Number.isSafeInteger(result.snapshot_seq) ||
       !Number.isSafeInteger(result.cursor) || result.cursor < cursor ||
       (snapshot !== undefined && result.snapshot_seq !== snapshot) ||
-      (result.has_more && result.cursor <= cursor)) throw new Error('Invalid room history page')
+      (result.has_more && result.cursor <= cursor)) {throw new Error('Invalid room history page')}
+
     snapshot = result.snapshot_seq
-    for (const message of result.messages) messages[message.event_id] = message
+
+    for (const message of result.messages) {messages[message.event_id] = message}
     cursor = result.cursor
-    if (!result.has_more) return { messages, snapshotSeq: snapshot }
+
+    if (!result.has_more) {return { messages, snapshotSeq: snapshot }}
   }
+
   throw new Error('Room history page limit reached; retry to reload')
 }

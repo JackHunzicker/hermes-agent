@@ -489,7 +489,9 @@ export function GroupRow({ active, group, members, needsYou, onOpen, onDisband }
       ? 'You'
       : `@${lastHandle}`
 
-  const preview = last ? `${speaker}: ${stripPreviewMarkdown(last.text) || '…'}` : `${members.length} bots`
+  const projectedLast = last?.eventId ? room.hostedHistory?.messages[last.eventId] : undefined
+  const previewText = projectedLast ? projectedLast.deleted ? 'Message deleted' : projectedLast.text || '' : last?.text || ''
+  const preview = last ? `${speaker}: ${stripPreviewMarkdown(previewText) || '…'}` : `${members.length} bots`
 
   const availableMembers = members.filter(member => botSourceStatus(member).available).length
   const availabilityLabel = `${availableMembers} of ${members.length} available`

@@ -460,6 +460,16 @@ describe('clarify and approvals (#90694)', () => {
     expect(Object.keys(chat.$groupClarify.get())).toHaveLength(0)
   })
 
+  it('never sends hosted input to the member session when its authority is unavailable', async () => {
+    const room = await loadRoom()
+    const member: GroupMember = { name: 'research', title: '' }
+    room.turns.syncGroupClarify('Core', member, { pending_clarify: CLARIFY })
+    const entry = Object.values(room.chat.$groupClarify.get())[0]
+    entry.hostedInput = { roomId: 'room', memberId: 'member', taskId: 'task', threadId: 'thread', executionGeneration: 1 }
+    await expect(room.turns.answerGroupClarify(entry, member, 'staging')).rejects.toThrow('authority')
+    expect(room.gateway.rpcFor('clarify.respond')).toEqual([])
+  })
+
   it('routes an answer through clarify.respond and clears the mirror', async () => {
     const room = await loadRoom()
     const member: GroupMember = { name: 'research', title: '' }

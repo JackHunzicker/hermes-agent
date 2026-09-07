@@ -11,6 +11,7 @@
 
 import type { ClassicFileRef, ClassicTurn } from './classic-output'
 import type { DesktopCommandSettled } from './group-command-receipts'
+import type { HostedHistory, HostedReadCursor } from './hosted-room-history'
 
 /**
  * The compact age suffixes the sidebar's session rows render ("now", "m", "h",
@@ -224,8 +225,8 @@ export interface GroupChat {
   hostedEpoch?: null | number
   /** Last contiguous hosted-room event sequence applied locally. */
   hostedSeq?: number
-  hostedHistory?: import('./hosted-room-history').HostedHistory
-  hostedRead?: import('./hosted-room-history').HostedReadCursor
+  hostedHistory?: HostedHistory
+  hostedRead?: HostedReadCursor
   /** Local groups.state verification; never accepted from or sent to ui_meta. */
   hostedMembersVerified?: boolean
   /** A conflicting display mirror requires a fresh authoritative membership read. */
@@ -283,7 +284,9 @@ export interface GroupPrompt {
   group: string
   /** Exact hosted-task identity when the prompt is owned by a Group Chat
    * authority rather than a visible member session. */
+  hostedInput?: { executionGeneration: number; memberId: string; roomId: string; taskId: string; threadId: string }
   hostedApproval?: {
+    threadId?: string
     executionGeneration: number
     memberId: string
     roomId: string

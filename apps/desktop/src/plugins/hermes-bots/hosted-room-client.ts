@@ -248,6 +248,7 @@ const KNOWN_EVENT_KINDS = new Set([
   'authority.lost',
   'member.unavailable',
   'message.member',
+  'message.participant',
   'message.user',
   'room.activity',
   'room.created',
@@ -852,7 +853,7 @@ function applyReplayEvent(state: HostedRoomReplayState, event: HostedRoomEvent):
     })
   }
 
-  if (event.kind === 'message.user' || event.kind === 'message.member') {
+  if (['message.user', 'message.member', 'message.participant'].includes(event.kind)) {
     state.messages.push(messageFromEvent(event, state.roomId))
   } else if (event.kind === 'room.created') {
     state.name = text(event.payload.name) || state.name

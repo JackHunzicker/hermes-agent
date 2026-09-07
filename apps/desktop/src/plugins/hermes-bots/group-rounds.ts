@@ -457,6 +457,13 @@ export function unaddressedGroupMentions(group: string, members: GroupMember[], 
 export async function stopGroupThread(group: string, thread: null | string, members: GroupMember[] | null = null) {
   const room = $groupChats.get()[group] || {}
 
+  if (groupChatHostedGateway(room) && thread !== null) {
+    const { stopHostedScope } = await import('./hosted-room-actions')
+    await stopHostedScope(group, { kind: 'thread', thread_id: thread }, crypto.randomUUID())
+
+    return
+  }
+
   if (groupChatHostedGateway(room)) {
     if (room.hostedStatus?.state === 'stopping') {
       return

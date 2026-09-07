@@ -28,8 +28,6 @@ import {
 } from './hosted-room-approval-state'
 import { stageHostedMessageAttachments } from './hosted-room-attachments-client'
 import { noteHostedRoomMentions } from './hosted-room-attention'
-import { readHostedHistory, supportsHostedMethod } from './hosted-room-history'
-import type { HostedReadCursor } from './hosted-room-history'
 import { $hostedRoomCapabilities } from './hosted-room-capability-state'
 import {
   addHostedRoomCleanup,
@@ -71,6 +69,8 @@ import {
   surfaceHostedRoomCommandFailure
 } from './hosted-room-command-failures'
 import { readHostedGroupAttachment } from './hosted-room-file-read'
+import { readHostedHistory, supportsHostedMethod } from './hosted-room-history'
+import type { HostedReadCursor } from './hosted-room-history'
 import {
   hostedReadOnlyState,
   hostedRoomCapabilityFingerprint,
@@ -741,9 +741,11 @@ export async function refreshHostedRooms() {
 
         const history = supportsHostedMethod(capability, 'groups.history', 'message_history_projection_v1') && !includeDisbanded
           ? await readHostedHistory(read, roomId) : undefined
+
         const readCursor = supportsHostedMethod(capability, 'groups.read.get', 'room_read_cursors_v1') && !includeDisbanded
           ? await read('groups.read.get', { room_id: roomId }) as HostedReadCursor : undefined
-        if (stale() || !hostedRoomMutationIsCurrent(roomId, refreshGeneration)) continue
+
+        if (stale() || !hostedRoomMutationIsCurrent(roomId, refreshGeneration)) {continue}
 
         const replayStatus = deriveFriendlyHostedRoomStatus(replay.state)
         const driver = record(stateResponse.driver_status)
@@ -907,7 +909,7 @@ export async function refreshHostedRooms() {
         noteHostedRoomMentions(localName, previousSeq, replay.state.messages)
 
         if (writable) {
-          syncHostedRoomApprovals(localName, serverRoom, memberDescriptors, pendingActions)
+          syncHostedRoomApprovals(localName, serverRoom, memberDescriptors, pendingActions, supportsHostedMethod(capability, 'groups.input.respond', 'scoped_input_v1'))
         } else {
           clearHostedRoomApprovalState(localName)
         }
@@ -1338,6 +1340,7 @@ export async function approveHostedGroupChat(entry: GroupPrompt, choice: string)
     member_id: approval.memberId,
     task_id: approval.taskId,
     execution_generation: approval.executionGeneration,
+    ...(approval.threadId ? { thread_id: approval.threadId } : {}),
     choice,
     request_id: entry.requestId
   })

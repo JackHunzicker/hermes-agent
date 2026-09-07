@@ -598,6 +598,8 @@ export function clearGroupClarify(group: string) {
  *  - approval: `approval.respond` with the choice (once/session/always/deny),
  *    keyed by session + request_id — the same wire the 1:1 approval card
  *    and native notifications use. */
+const hostedInputCommands = new WeakMap<GroupPrompt, Map<string, { answer: string; commandId: string }>>()
+
 export async function answerGroupClarify(
   entry: GroupPrompt,
   member: GroupMember,
@@ -614,6 +616,19 @@ export async function answerGroupClarify(
         request_id: entry.requestId,
         choice
       })
+    }
+  } else if (entry.hostedInput) {
+    const { respondHostedInput } = await import('./hosted-room-actions')
+    const commands = hostedInputCommands.get(entry) || new Map<string, { answer: string; commandId: string }>()
+    hostedInputCommands.set(entry, commands)
+    const pairs: Array<[string | undefined, string]> = typeof answers === 'string' ? [[undefined, answers]] : Object.entries(answers || {})
+
+    for (const [questionId, answer] of pairs) {
+      const key = questionId || ''
+      const prior = commands.get(key)
+      const command = prior?.answer === answer ? prior : { answer, commandId: crypto.randomUUID() }
+      commands.set(key, command)
+      await respondHostedInput(entry.group, entry.hostedInput, entry.requestId, answer, command.commandId, questionId)
     }
   } else if (entry.questions && entry.questions.length) {
     for (const question of entry.questions) {
