@@ -1530,3 +1530,30 @@ def test_renewal_requests_and_response_reads_share_one_deadline(monkeypatch):
             client._request("/test")
     assert timeouts == [1, 1, 0.5]
     assert now[0] == 102
+
+
+@pytest.mark.parametrize("operation", ["upload", "download"])
+def test_binary_redirect_closes_without_consuming_untrusted_body(monkeypatch, operation):
+    from tui_gateway import hosted_room_peer_http as http
+
+    class Body(io.BytesIO):
+        reads = 0
+        def read1(self, size=-1):
+            self.reads += 1
+            raise TimeoutError("untrusted redirect body stalls")
+
+    body = Body(b"not needed")
+    response = urllib.error.HTTPError("http://127.0.0.1/file", 307, "redirect", {}, body)
+    def redirected(*args, **kwargs):
+        raise response
+    monkeypatch.setattr(http, "_open_roomlink_url", redirected)
+    client = PeerRunsHTTPClient(base_url="http://127.0.0.1", api_key="")
+    with pytest.raises(PeerRunsHTTPError, match="refused an HTTP redirect") as caught:
+        if operation == "upload":
+            client._put_attachment("/upload", data=b"bytes", grant="scoped.grant")
+        else:
+            client.read_artifact(run_id="run", artifact_id="file", grant="scoped.grant")
+    assert caught.value.status_code == 307
+    assert not caught.value.retryable
+    assert body.reads == 0
+    assert body.closed

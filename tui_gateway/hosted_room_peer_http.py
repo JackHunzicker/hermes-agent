@@ -896,6 +896,11 @@ class PeerRunsHTTPClient:
                 ambiguous=True,
             ) from exc
         except urllib.error.HTTPError as exc:
+            if exc.code in {301, 302, 303, 307, 308}:
+                exc.close()
+                raise PeerRunsHTTPError(
+                    "peer attachment upload refused an HTTP redirect", status_code=exc.code,
+                ) from exc
             try:
                 detail = _read_bounded_response(
                     exc,
@@ -910,11 +915,6 @@ class PeerRunsHTTPClient:
                 exc.code,
                 error_code or "no-code",
             )
-            if exc.code in {301, 302, 303, 307, 308}:
-                raise PeerRunsHTTPError(
-                    "peer attachment upload refused an HTTP redirect",
-                    status_code=exc.code,
-                ) from exc
             raise PeerRunsHTTPError(
                 f"peer rejected attachment upload with HTTP {exc.code}",
                 retryable=exc.code in {408, 425, 429} or exc.code >= 500,
@@ -1083,6 +1083,11 @@ class PeerRunsHTTPClient:
                 retryable=True,
             ) from exc
         except urllib.error.HTTPError as exc:
+            if exc.code in {301, 302, 303, 307, 308}:
+                exc.close()
+                raise PeerRunsHTTPError(
+                    "peer artifact download refused an HTTP redirect", status_code=exc.code,
+                ) from exc
             try:
                 detail = _read_bounded_response(
                     exc,
@@ -1103,11 +1108,7 @@ class PeerRunsHTTPClient:
             except Exception:
                 detail = ""
             raise PeerRunsHTTPError(
-                (
-                    "peer artifact download refused an HTTP redirect"
-                    if exc.code in {301, 302, 303, 307, 308}
-                    else f"peer rejected artifact download with HTTP {exc.code}: {detail}"
-                ),
+                f"peer rejected artifact download with HTTP {exc.code}: {detail}",
                 retryable=exc.code in {408, 425, 429} or exc.code >= 500,
                 status_code=exc.code,
                 error_code=_response_error_code(detail),
