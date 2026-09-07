@@ -8,6 +8,7 @@ from gateway import hosted_room_driver as driver, hosted_rooms as rooms
 from model_tools import get_tool_definitions, handle_function_call
 from tests.tui_gateway.hosted_room_service_fixtures import _server
 from tui_gateway.hosted_room_service import HostedRoomService
+from tui_gateway.hosted_room_driver import HostedRoomBinding
 from tui_gateway import server
 
 
@@ -46,6 +47,21 @@ def participant(tmp_path, monkeypatch, request):
 
 def call(**args):
     return json.loads(handle_function_call("group_room", args, task_id="not-authority"))
+
+
+def test_default_room_delivers_accepted_participant_handoff(participant):
+    service, room, _, task, session = participant
+    sent = call(operation="send", event_id="handoff-proof", text="@default inspect the handoff")
+    assert sent["ok"] is True, sent
+    assert sent["event"]["payload"]["mention_member_ids"] == ["default"]
+    driver.settle_task(service.db_path, session["_test_attempt"], settlement_id="sender-done",
+                       status="settled", result={"text": "PASS"}, clock=time.time)
+    binding = HostedRoomBinding(room["room_id"], room["authority_gateway_id"], room["authority_epoch"])
+    service.prepare_room(binding)
+    tasks = driver.list_tasks(service.db_path, room_id=room["room_id"], status="queued")
+    print("Accepted participant event:", sent["event"]["event_id"], "queued recipients:", [t["payload"]["target_member_id"] for t in tasks])
+    assert any(t["payload"]["target_member_id"] == "default" and "inspect the handoff" in t["payload"]["prompt"] for t in tasks), \
+        "Accepted @default participant handoff was not delivered in the default room policy"
 
 
 def test_participant_registry_send_is_attributed_idempotent_and_attempt_fenced(participant):
