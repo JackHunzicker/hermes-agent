@@ -56,10 +56,10 @@ async def test_cancelled_next_page_does_not_drop_snapshot_rows(consumer, monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spacing", [0, 0.125, 35])
-async def test_complete_global_telegram_captions_preserve_versions(consumer, spacing):
+@pytest.mark.parametrize("name", ["brief.md", "quarterly-report-long-name-" * 7 + ".md"])
+async def test_complete_global_telegram_captions_preserve_versions(consumer, spacing, name):
     state, runner, _ = consumer
     hosted_rooms.rename_room(state.db, room_id="room-1", event_id="caption-rename", name="Workshop coordination room")
-    name = "quarterly-report-long-name-" * 7 + ".md"
     for serial in range(2):
         batch(state, [name], at=1_788_509_527 + serial * spacing, serial=serial, producer="You")
     runner.config.platforms[Platform.TELEGRAM] = runner.config.platforms[Platform.SIGNAL]
@@ -68,6 +68,9 @@ async def test_complete_global_telegram_captions_preserve_versions(consumer, spa
     labels, callback_ids = telegram_labels(page, 2)
     assert len(set(callback_ids)) == len(set(labels)) == 2
     assert all(len(caption) <= 64 for caption in labels)
+    assert all(".md" in caption for caption in labels)
+    if name == "brief.md":
+        assert all(name in caption for caption in labels)
     assert [menu.actions[choice["value"]][1] for choice in page.choices[:2]] == menu.pages[0]["rows"]
 
 
@@ -117,3 +120,45 @@ async def test_empty_global_view_has_no_noop_search_or_refresh(consumer):
     assert list(menu.actions.values()) == [("groups", None)]
     assert "files <text>" not in menu.plain_files()
     assert text("all_empty") in call["title"]
+
+
+@pytest.mark.asyncio
+async def test_refill_timeout_offers_reload_without_losing_snapshot_cursor(consumer, monkeypatch):
+    state, runner, adapter = consumer
+    for index in range(18):
+        share(state, state.room, index, when=time.time() - 100 + index)
+    menu, _ = await open_menu(consumer)
+    cursor = next(iter(menu.streams.values()))["cursor"]
+    original_list = state.backend.list_files
+    release = threading.Event()
+
+    def blocked_refill(**kwargs):
+        assert kwargs["cursor"] == cursor
+        assert release.wait(5)
+        return original_list(**kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(all_files, "BATCH_TIMEOUT", 0.03)
+            patch.setattr(state.backend, "list_files", blocked_refill)
+            assert await runner._handle_rooms_command(event(f"/group files --page {menu.handle} 2")) is None
+    finally:
+        release.set()
+
+        async def drained():
+            while runner._all_group_files_read_slots._value != 4:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(drained(), 3)
+    assert len(menu.pages) == 1 and menu.failed_page == 1
+    assert next(iter(menu.streams.values()))["cursor"] == cursor
+    failed = adapter.pages[-1]
+    assert failed["title"] == text("error")
+    assert failed["choices"][0]["label"] == text("reload_page")
+    assert f"files --page {menu.handle} 2`" in menu.plain_files()
+    await menu.choose("chat", failed["choices"][0]["value"])
+    assert menu.failed_page is None
+    assert len(menu.pages[1]["rows"]) == 8
+    await menu.open_page(2)
+    seen = {item["event_id"] for page in menu.pages for _, item in page["rows"]}
+    assert seen == {f"event-{index}" for index in range(18)}

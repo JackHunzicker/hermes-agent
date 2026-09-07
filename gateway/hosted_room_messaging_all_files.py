@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import OrderedDict
 
 from gateway.hosted_room_messaging_files import (
     FilesMenu,
+    _clip_caption_part,
     _error,
     _rate,
     _room_key,
@@ -18,6 +20,10 @@ from gateway.hosted_room_messaging_files import (
 PAGE_SIZE = 8
 MAX_GLOBAL_MENUS = 8
 BATCH_TIMEOUT = 20
+
+
+class PageReadUnavailable(RuntimeError):
+    """Retryable catalogue failure at an already established snapshot cursor."""
 
 
 class AllFilesMenu(FilesMenu):
@@ -31,6 +37,7 @@ class AllFilesMenu(FilesMenu):
         self.child = None
         self.lock = asyncio.Lock()
         self.read_deadline = None
+        self.failed_page = None
 
     async def _read(self, function, **kwargs):
         self.check()
@@ -114,11 +121,23 @@ class AllFilesMenu(FilesMenu):
             for stream in selected
         ])
         for stream, result in zip(selected, results):
-            stream["loaded"] = True
             if isinstance(result, BaseException):
+                if (
+                    stream["loaded"]
+                    and stream["cursor"]
+                    and getattr(result, "code", "")
+                    not in {
+                        "file_access_denied",
+                        "file_unavailable",
+                        "attachment_cursor_reset_required",
+                    }
+                ):
+                    raise PageReadUnavailable()
+                stream["loaded"] = True
                 stream["cursor"] = None
                 self.incomplete = True
             else:
+                stream["loaded"] = True
                 stream["items"] = list(result["items"])
                 stream["cursor"] = result["next_cursor"] if result["has_more"] else None
 
@@ -144,7 +163,10 @@ class AllFilesMenu(FilesMenu):
         for (room, item), result in zip(eligible, results):
             if isinstance(result, BaseException):
                 self.incomplete = True
-                if getattr(result, "code", "") not in {"file_unavailable", "file_access_denied"}:
+                if getattr(result, "code", "") not in {
+                    "file_unavailable",
+                    "file_access_denied",
+                }:
                     retained.append((room, item))
             else:
                 verified.append((room, result))
@@ -173,8 +195,10 @@ class AllFilesMenu(FilesMenu):
             self.pages = [dict(page) for page in self.pages]
             self.read_deadline = time.monotonic() + BATCH_TIMEOUT
             try:
-                return await self._construct_page(index)
-            except BaseException:
+                result = await self._construct_page(index)
+                self.failed_page = None
+                return result
+            except BaseException as exc:
                 (
                     self.streams,
                     self.pages,
@@ -187,6 +211,12 @@ class AllFilesMenu(FilesMenu):
                 if self.deadline <= time.monotonic():
                     self.streams.clear()
                     self.pages.clear()
+                if isinstance(exc, PageReadUnavailable):
+                    self.check()
+                    self.failed_page = index
+                    return self.page(
+                        text("error"), [(text("reload_page"), ("page", index))]
+                    )
                 raise
             finally:
                 self.read_deadline = None
@@ -241,9 +271,10 @@ class AllFilesMenu(FilesMenu):
                 self.pages.pop(0)
                 self.first_page += 1
                 offset -= 1
-        self.pages[offset]["rows"], self.pages[offset]["candidates"] = await self._verify_rows(
-            self.pages[offset]["candidates"], current
-        )
+        (
+            self.pages[offset]["rows"],
+            self.pages[offset]["candidates"],
+        ) = await self._verify_rows(self.pages[offset]["candidates"], current)
         self.position = index
         return self.render()
 
@@ -268,7 +299,8 @@ class AllFilesMenu(FilesMenu):
 
         page = self.pages[self.position - self.first_page]
         actions = []
-        for room, item in page["rows"]:
+        seen = set()
+        for index, (room, item) in enumerate(page["rows"]):
             prefix = f"{room_reference(room)}. {label(room.get('name'), 14)} · "
             limit = 64 if self.event.source.platform.value == "telegram" else 100
             caption = self._caption_menu(room)._file_labels(
@@ -279,9 +311,30 @@ class AllFilesMenu(FilesMenu):
                 caption = self._caption_menu(room)._file_labels(
                     [item], max_caption_chars=limit - len(prefix)
                 )[0]
+            name = label(item["name"], len(item["name"]))
+            if re.fullmatch(r"[0-9a-f]{8,64}", caption) or (
+                (len(name) <= 16 and name not in caption)
+                or (
+                    len(name) > 16
+                    and (name[:5] not in caption or name[-4:] not in caption)
+                )
+            ):
+                from gateway.hosted_room_file_lookup import selection_digest
+
+                code = selection_digest(room, item)[:8]
+                suffix = f" [{code}]"
+                caption = (
+                    _clip_caption_part(name, limit - len(prefix) - len(suffix)) + suffix
+                )
             caption = (
                 prefix + caption if len(prefix) + len(caption) <= limit else caption
             )
+            if caption in seen:
+                numbered = f"{text('download')} {index + 1} · {room_reference(room)} · "
+                caption = (
+                    numbered + _clip_caption_part(name, limit - len(numbered))
+                )
+            seen.add(caption)
             actions.append((caption, ("file", (room, item))))
         if self.position > self.first_page:
             actions.append((
@@ -311,6 +364,16 @@ class AllFilesMenu(FilesMenu):
         from gateway.hosted_room_file_lookup import selection_digest
         from gateway.hosted_room_messaging import room_reference
 
+        if self.failed_page is not None:
+            return (
+                text("error")
+                + "\n\n"
+                + text(
+                    "command_hint",
+                    caption=text("reload_page"),
+                    command=f"`{self.command} files --page {self.handle} {self.failed_page + 1}`",
+                )
+            )
         page = self.pages[self.position - self.first_page]
         lines = [
             "**"
