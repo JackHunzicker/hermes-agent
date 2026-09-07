@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -19,6 +20,7 @@ from typing import Any
 
 from gateway import hosted_room_links as links
 from gateway import hosted_rooms as rooms
+from gateway import hosted_room_work_records as work_records
 from gateway import hosted_room_replica_retirement as retirement
 from gateway.hosted_room_peer import PROTOCOL_VERSION, _split_token, gateway_room_grant_secret
 from gateway.hosted_rooms_common import open_sqlite, table_exists
@@ -119,6 +121,7 @@ class HostedRoomReplicationPublisher:
         self._retirement_delays: dict[_RetirementWork, float] = {}
         self._scan_at = 0.0
         self._error: str | None = None
+        self._work_record_error: str | None = None
         with self._transaction() as conn:
             conn.execute(f"""CREATE TABLE IF NOT EXISTS {_TABLE} (
                 room_id TEXT NOT NULL, member_id TEXT NOT NULL, generation TEXT NOT NULL,
@@ -128,6 +131,13 @@ class HostedRoomReplicationPublisher:
                 pending_end INTEGER, pending_latest INTEGER, pending_name TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', updated_at REAL NOT NULL,
                 PRIMARY KEY(room_id, member_id))""")
+            if "work_record_status" not in {row["name"] for row in conn.execute(f"PRAGMA table_info({_TABLE})")}:
+                conn.execute(f"ALTER TABLE {_TABLE} ADD COLUMN work_record_status TEXT NOT NULL DEFAULT 'pending'")
+                if table_exists(conn, work_records.PENDING_TABLE):
+                    conn.execute(f"""UPDATE {_TABLE} SET work_record_status=COALESCE((
+                        SELECT p.status FROM {work_records.PENDING_TABLE} AS p
+                        WHERE p.room_id={_TABLE}.room_id AND p.target_install_id={_TABLE}.target_install_id
+                          AND p.route_generation={_TABLE}.generation), 'pending')""")
             conn.execute(f"""CREATE TABLE IF NOT EXISTS {_TARGET_TABLE} (
                 room_id TEXT NOT NULL, target_install_id TEXT NOT NULL, lineage TEXT NOT NULL,
                 selected_member_id TEXT NOT NULL, acked_seq INTEGER NOT NULL DEFAULT 0,
@@ -322,7 +332,7 @@ class HostedRoomReplicationPublisher:
                 target_install_id=excluded.target_install_id, target_profile=excluded.target_profile,
                 authority_gateway_id=excluded.authority_gateway_id, authority_epoch=excluded.authority_epoch,
                 acked_seq=0, source_latest_seq=0, pending_end=NULL, pending_latest=NULL,
-                pending_name=NULL, status='pending', updated_at=excluded.updated_at
+                pending_name=NULL, status='pending', work_record_status='pending', updated_at=excluded.updated_at
                 WHERE generation!=excluded.generation""", (
                     *route.key, route.generation, route.link.catalog.installation_id, route.link.target_profile,
                     route.room["authority_gateway_id"], route.room["authority_epoch"], time.time(),
@@ -362,8 +372,12 @@ class HostedRoomReplicationPublisher:
                 "SELECT * FROM hosted_room_links WHERE room_id=? ORDER BY member_id LIMIT ?",
                 (initial.key[0], links.MAX_LINKS),
             ).fetchall()
+            target = conn.execute(f"SELECT * FROM {_TARGET_TABLE} WHERE room_id=? AND target_install_id=?",
+                                  (initial.key[0], initial.link.catalog.installation_id)).fetchone()
         selected = []
         room = rooms.room_state(self.db_path, room_id=initial.key[0], include_disbanded=True)
+        history_needed = (target is None or target["pending_end"] is not None
+                          or target["acked_seq"] < room["latest_seq"] or target["status"] != "acked")
         for raw in candidates:
             if not _replication_hint(raw["grant"]):
                 continue
@@ -376,8 +390,17 @@ class HostedRoomReplicationPublisher:
             route = _Route((link.room_id, link.member_id), link, room, _generation(link, room))
             checkpoint = self._checkpoint(route)
             if checkpoint is not None and checkpoint["status"] not in _BLOCKED:
-                selected.append((checkpoint["status"] == "unavailable", route.key, route))
-        return min(selected, key=lambda item: item[:2])[2] if selected else None
+                opted_in = work_records.PERMISSION in _replication_hint(link.grant).get("permissions", ())
+                refused = checkpoint["work_record_status"] in work_records.BLOCKED_DELIVERY_STATUSES
+                work_rank = 2 if opted_in and refused else 0 if opted_in else 1
+                unavailable = checkpoint["status"] == "unavailable"
+                work_unavailable = checkpoint["work_record_status"] == "unavailable"
+                # Equal transient work failures must get their existing queue
+                # turns; a stable member key otherwise pins retries to one peer.
+                turn_rank = route.key != initial.key if work_rank == 0 and work_unavailable else False
+                rank = (unavailable, work_rank, work_unavailable, False) if history_needed else (work_rank, work_unavailable, turn_rank, unavailable)
+                selected.append((*rank, route.key, route))
+        return min(selected, key=lambda item: item[:5])[5] if selected else None
 
     def _target_checkpoint(self, route: _Route) -> dict | None:
         lineage = _digest([route.room["authority_gateway_id"], route.room["authority_epoch"], route.room["members"]])
@@ -441,7 +464,7 @@ class HostedRoomReplicationPublisher:
                 return False
         cursor, pending = checkpoint["acked_seq"], checkpoint["pending_end"]
         if pending is None and cursor >= route.room["latest_seq"] and checkpoint["status"] == "acked":
-            return False
+            return self._publish_work_records(route, checkpoint, client)
         limit = PAGE_LIMIT if pending is None else max(1, pending - cursor)
         page = rooms.read_events(
             self.db_path, room_id=key[0], since_seq=cursor, limit=limit, include_disbanded=True,
@@ -489,6 +512,54 @@ class HostedRoomReplicationPublisher:
         )
         return saved and page["has_more"]
 
+    def _publish_work_records(self, route, checkpoint, client) -> bool:
+        if work_records.PERMISSION not in _replication_hint(route.link.grant).get("permissions", ()):
+            return False
+        try:
+            with self._transaction() as conn:
+                if not self._current(conn, route):
+                    return False
+                state = conn.execute(f"SELECT work_record_status FROM {_TABLE} WHERE room_id=? AND member_id=? AND generation=?",
+                                     (*route.key, route.generation)).fetchone()
+                if state is None or state[0] in work_records.BLOCKED_DELIVERY_STATUSES:
+                    return False
+                record = work_records.prepare_delivery_locked(
+                    conn, room_id=route.key[0], target_install_id=route.link.catalog.installation_id,
+                    route_generation=route.generation, local_gateway_id=self.local_id, through_seq=checkpoint["acked_seq"])
+            if record is None or self._stop.is_set():
+                return False
+            status = "acked"
+            prefix_gap = False
+            try:
+                reply = client.replicate_work_records(grant=route.link.grant, target_profile=route.link.target_profile, record=record)
+                if (not isinstance(reply, dict) or reply.get("room_id") != route.key[0]
+                        or type(reply.get("revision")) is not int or reply["revision"] != record["revision"]
+                        or reply.get("digest") != record["digest"] or reply.get("passive") is not True):
+                    status = "invalid_ack"
+            except PeerRunsHTTPError as exc:
+                status = "unavailable"
+                prefix_gap = exc.status_code == 409 and exc.error_code == "work_records_prefix"
+                if exc.status_code in {401, 403}:
+                    status = "needs_reauthorization"
+                elif exc.status_code is not None and 400 <= exc.status_code < 500 and exc.status_code not in {408, 429} and not prefix_gap:
+                    status = "rejected"
+            with self._transaction() as conn:
+                if self._current(conn, route):
+                    saved = work_records.delivery_status_locked(
+                        conn, room_id=route.key[0], target_install_id=route.link.catalog.installation_id,
+                        route_generation=route.generation, record=record, status=status)
+                    if saved:
+                        conn.execute(f"UPDATE {_TABLE} SET work_record_status=? WHERE room_id=? AND member_id=? AND generation=?",
+                                     (status, *route.key, route.generation))
+            if prefix_gap:
+                self._save(route, checkpoint, acked_seq=0, pending_end=None, pending_latest=None, pending_name=None, status="replica_gap")
+            self._work_record_error = None
+        except work_records.WorkRecordPrefixError:
+            return False  # the source grew before this snapshot; copy history first
+        except (work_records.WorkRecordError, sqlite3.Error, OSError):
+            self._work_record_error = "work_record_capture_unavailable"
+        return False
+
     def _http_failure(self, route: _Route, checkpoint: dict, exc: PeerRunsHTTPError) -> bool:
         if exc.status_code == 409 and exc.error_code == "room_replica_gap":
             self._save(route, checkpoint, acked_seq=0, pending_end=None, pending_latest=None,
@@ -509,8 +580,9 @@ class HostedRoomReplicationPublisher:
         try:
             with closing(open_sqlite(self.db_path, timeout=0.25)) as conn:
                 has_retirement = table_exists(conn, retirement.HOME_TABLE)
+                record_deliveries = work_records.delivery_summaries_locked(conn, room_id)
                 rows = conn.execute(f"""SELECT r.room_id, member_id, r.target_install_id, target_profile,
-                    authority_gateway_id, authority_epoch, r.acked_seq, r.source_latest_seq, r.status, r.updated_at,
+                    authority_gateway_id, authority_epoch, r.acked_seq, r.source_latest_seq, r.status, r.updated_at, r.work_record_status,
                     t.selected_member_id, t.acked_seq AS target_acked_seq, t.status AS target_status,
                     t.source_latest_seq AS target_source_latest_seq
                     FROM {_TABLE} AS r LEFT JOIN {_TARGET_TABLE} AS t
@@ -525,10 +597,11 @@ class HostedRoomReplicationPublisher:
             if has_retirement:
                 retirements = retirement.home_status(self.db_path, room_id=room_id)
         except (OSError, sqlite3.Error):
-            routes, retirements, error = None, None, "publisher_status_unavailable"
+            routes, retirements, record_deliveries, error = None, None, None, "publisher_status_unavailable"
         return {
             "running": any(t.is_alive() for t in self._threads), "stopping": self._stop.is_set(),
             "workers": sum(t.is_alive() for t in self._threads), "routes": routes,
             "retirements": retirements,
+            "work_records": record_deliveries, "work_records_error": self._work_record_error,
             "error": error, "mode": "passive_async_copy", "source_loss_safe": False,
         }

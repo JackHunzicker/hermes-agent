@@ -420,15 +420,17 @@ _GRANT_SCOPE = (
 _GRANT_FIELDS = frozenset({
     "version", *_GRANT_SCOPE, "execution_policy_digest", "permissions", "issued_at", "expires_at"})
 _GRANT_REFRESH_FIELDS = _GRANT_FIELDS | {"status_expires_at"}
-_GRANT_PERMISSIONS = {"approve", "attachment.stage", "artifact.ack", "artifact.read", "dispatch", "status", "stop", "replicate"}
+_GRANT_PERMISSIONS = {"approve", "attachment.stage", "artifact.ack", "artifact.read", "dispatch", "status", "stop", "replicate", "work_records"}
 
 
-def invitation_permissions(replication: Any = False) -> tuple[str, ...]:
+def invitation_permissions(replication: Any = False, work_records: Any = False) -> tuple[str, ...]:
     """Keep opt-in semantics identical on JSON-RPC and HTTP invitations."""
     if type(replication) is not bool:
         raise HostedRoomGrantError("replication must be a boolean")
+    if type(work_records) is not bool or (work_records and not replication):
+        raise HostedRoomGrantError("work_records requires an explicit replication opt-in")
     normal = ("approve", "attachment.stage", "artifact.ack", "artifact.read", "dispatch", "status", "stop")
-    return (*normal, "replicate") if replication else normal
+    return (*normal, "replicate", "work_records") if work_records else (*normal, "replicate") if replication else normal
 
 
 MAX_DISPATCH_GRANT_TTL_SECONDS = 24 * 60 * 60
@@ -534,7 +536,7 @@ def decode_room_grant(
         raise HostedRoomGrantError("room grant lifetime is invalid")
     operation_expires_at = (
         status_expires_at
-        if permission in {"approve", "status", "stop", "replicate"}
+        if permission in {"approve", "status", "stop", "replicate", "work_records"}
         else expires_at
     )
     if (

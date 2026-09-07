@@ -33,6 +33,28 @@ Grant values are secrets. Never put them in examples, logs, screenshots or issue
 
 Coordination files under `room_replication_locks` contain no credentials. Do not unlink them while services can be running: replacing a locked file can create two independent lock owners. They are local process coordination, not a distributed authority lease.
 
+## Retain Unfinished-Work Records
+
+History alone cannot show every accepted task or pending Stop. An additional, explicit invitation option retains bounded task and receipt metadata on participants. It does not transfer execution rights.
+
+Follow the history-copy and retirement-enrollment setup above. When issuing a new target-side `groups.peer.invite` or `POST /v1/room-members/invitations`, add both flags to the existing invitation coordinates:
+
+```json
+{"replication": true, "work_records": true}
+```
+
+Require `work_records_version: 1` in the invitation response before treating this option as supported. The scoped capability probe also reports that version. An older response or a history-only grant does not enable work-record delivery. Existing grants do not silently acquire the new permission; keep a working route unchanged if the target cannot support the requested option.
+
+After registering the returned grant normally, the existing publisher delivers work records once their corresponding history prefix has arrived. Inspect source `groups.state` under `driver_status.replication.work_records`; participant `groups.replica_state` exposes `work_records` with the observed prefix, revision, task phases, receipt coordinates, Stop facts and limitations. This is an API-first surface, not a new Desktop or messaging recovery screen.
+
+Task phases can change without a new message, so records use their own durable content revision. A lost acknowledgment retries the same pending record before replacing it. A refused route does not prevent an explicitly authorized alternate from carrying that record; known refusals remain scoped to the route generation. Retirement still rejects late writes and reclaims record payloads without erasing the retired group identity.
+
+Records exclude prompts, result bodies, commands, file bytes, private paths, broad credentials and signing secrets. They retain identifiers and digests, not a Bot's private context or running process. The source snapshot is consistent within its SQLite transaction; it is not a distributed transaction with the participant's live run store.
+
+Limits are 128 tasks, 256 receipts and 128 KiB per record, with a shared 4 MiB/512-row budget for record storage. Unsupported or oversized captures explicitly report unavailable evidence, not a complete-looking truncated list. Core records do not certify the field build's additional approval/retry/input journals. No maximum freshness lag is promised under sustained history growth.
+
+**Available metadata is not permission to resume.** A missing receipt does not mean a task never ran; an uncopied final update can still be lost. These records are passive evidence, not a complete execution checkpoint, an approval decision or a takeover certificate. `source_loss_safe` remains false.
+
 ## Disband And Copy Retirement
 
 The existing irreversible disband fence, acknowledged Stop and ordinary-grant revocation remain the execution-safety boundary. Only canonical home disband makes a retirement notice deliverable. The private journal remains available after live routes and retained canonical payload have been removed.

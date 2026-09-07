@@ -166,6 +166,8 @@ def _initialize(conn: sqlite3.Connection) -> None:
             OR NEW.last_seq IS NOT OLD.last_seq OR NEW.latest_seq IS NOT OLD.latest_seq
             OR NEW.disbanded_at IS NOT OLD.disbanded_at)
         BEGIN SELECT RAISE(ABORT, 'replica copy is retired'); END""")
+    from gateway.hosted_room_work_records import initialize_retirement_guards
+    initialize_retirement_guards(conn)
 
 
 @contextmanager
@@ -811,6 +813,8 @@ def retire_copy(
             f"UPDATE {ENROLLMENT_TABLE} SET state='retired' WHERE enrollment_id=?",
             (row["enrollment_id"],),
         )
+        from gateway.hosted_room_work_records import discard_retired_locked
+        discard_retired_locked(conn, row["room_id"])
         return {
             "retired": True,
             **dict(
