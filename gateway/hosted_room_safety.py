@@ -509,15 +509,27 @@ def _prune_disbanded_replicas_locked(
 ) -> int:
     """Reclaim terminal replica payload while its room-ID reservation remains."""
     from gateway import hosted_rooms as limits
+    from gateway.hosted_room_replica_retirement import RETIREMENT_TABLE
+    canonical = "(disbanded_at IS NOT NULL AND last_seq=latest_seq)"
+    eligible = canonical
+    retired_at = "disbanded_at"
+    if table_exists(conn, RETIREMENT_TABLE):
+        match = f"""SELECT retired_at FROM {RETIREMENT_TABLE} AS retirement
+            WHERE retirement.room_id=hosted_room_replicas.room_id
+              AND retirement.authority_gateway_id=hosted_room_replicas.authority_gateway_id
+              AND retirement.authority_epoch=hosted_room_replicas.authority_epoch"""
+        eligible = f"({canonical} OR EXISTS ({match}))"
+        retired_at = f"CASE WHEN {canonical} THEN disbanded_at ELSE ({match}) END"
+    eligible += """ AND quarantine_reason IS NULL AND NOT EXISTS (
+        SELECT 1 FROM hosted_room_quarantine
+        WHERE hosted_room_quarantine.room_id=hosted_room_replicas.room_id)"""
     candidates: set[str] = set()
     if now is not None:
         cutoff = now - limits.DISBANDED_REPLICA_RETENTION_SECONDS
         candidates.update(
             str(row["room_id"])
             for row in conn.execute(
-                """SELECT room_id FROM hosted_room_replicas
-                     WHERE disbanded_at IS NOT NULL AND disbanded_at<=?
-                       AND last_seq=latest_seq AND quarantine_reason IS NULL""",
+                f"SELECT room_id FROM hosted_room_replicas WHERE {eligible} AND ({retired_at})<=?",
                 (cutoff,),
             ).fetchall()
         )
@@ -529,10 +541,7 @@ def _prune_disbanded_replicas_locked(
         )
         if retained_bytes > max_replica_event_bytes:
             for row in conn.execute(
-                """SELECT room_id, event_bytes FROM hosted_room_replicas
-                     WHERE disbanded_at IS NOT NULL AND last_seq=latest_seq
-                       AND quarantine_reason IS NULL
-                     ORDER BY disbanded_at ASC, room_id ASC"""
+                f"SELECT room_id,event_bytes FROM hosted_room_replicas WHERE {eligible} ORDER BY ({retired_at}),room_id"
             ).fetchall():
                 candidates.add(str(row["room_id"]))
                 retained_bytes -= int(row["event_bytes"])
@@ -544,10 +553,7 @@ def _prune_disbanded_replicas_locked(
         )
         if retained_rooms > max_replica_rooms:
             for row in conn.execute(
-                """SELECT room_id FROM hosted_room_replicas
-                     WHERE disbanded_at IS NOT NULL AND last_seq=latest_seq
-                       AND quarantine_reason IS NULL
-                     ORDER BY disbanded_at ASC, room_id ASC"""
+                f"SELECT room_id FROM hosted_room_replicas WHERE {eligible} ORDER BY ({retired_at}),room_id"
             ).fetchall():
                 candidates.add(str(row["room_id"]))
                 retained_rooms -= 1
@@ -563,8 +569,7 @@ def _prune_disbanded_replicas_locked(
     )
     deleted = conn.execute(
         f"""DELETE FROM hosted_room_replicas
-             WHERE room_id IN ({placeholders}) AND disbanded_at IS NOT NULL
-               AND last_seq=latest_seq AND quarantine_reason IS NULL""",
+             WHERE room_id IN ({placeholders}) AND {eligible}""",
         room_ids,
     )
     return max(0, int(deleted.rowcount))

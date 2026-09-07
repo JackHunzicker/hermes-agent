@@ -83,6 +83,7 @@ def _local_room_catalog(self, profile: str, installation_id: str) -> tuple[dict,
 
 def _http_routes(self) -> list[tuple[str, str, Any]]:
     from gateway.platforms.api_server_room_replicas import http_routes
+    from gateway.platforms.api_server_replica_retirement import http_routes as retirement_routes
 
     async def revoke_exact(request):
         from gateway.platforms import api_server
@@ -116,7 +117,7 @@ def _http_routes(self) -> list[tuple[str, str, Any]]:
             self._handle_room_member_grant_revoke,
         ),
         ("POST", "/v1/room-members/grants/revoke-exact", revoke_exact),
-    ] + http_routes(self)
+    ] + http_routes(self) + retirement_routes(self)
 
 
 def _room_grant_token(request: "web.Request") -> str:
@@ -269,9 +270,18 @@ async def _handle_room_member_capabilities(
         _, catalog = _local_room_catalog(self, profile, installation_id)
     except Exception as exc:
         return _room_grant_error_response(exc, _openai_error=_openai_error)
+    enrollment = None
+    if "replicate" in claims.get("permissions", ()):
+        from gateway import hosted_rooms
+        from gateway.hosted_room_replica_retirement import current_target_enrollment
+        enrollment = current_target_enrollment(
+            hosted_rooms.default_db_path(), room_id=claims["room_id"],
+            authority_gateway_id=claims["authority_gateway_id"], authority_epoch=claims["authority_epoch"],
+        )
     return web.json_response({
         "object": "hermes.room_member.capabilities", **{k: claims[k] for k in _ROOM_IDENTITY_FIELDS},
-        "target_profile": profile, "catalog": catalog})
+        "target_profile": profile, "catalog": catalog,
+        **({"retirement_enrollment": enrollment} if enrollment is not None else {})})
 
 
 async def _handle_room_member_grant_refresh(

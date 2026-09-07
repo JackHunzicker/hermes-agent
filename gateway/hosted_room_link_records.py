@@ -93,6 +93,9 @@ def begin_room_link_retirement(
                 int(existing["authority_epoch"]),
             ) != lineage:
                 raise AuthorityConflictError("Group Chat route fence authority changed")
+            from gateway.hosted_room_replica_retirement import freeze_home_enrollments_locked
+            freeze_home_enrollments_locked(
+                conn, room_id=room_id, authority_gateway_id=authority_gateway_id, authority_epoch=authority_epoch)
             return dict(existing)
         conn.execute(
             """INSERT INTO hosted_room_disband_fences(
@@ -100,6 +103,9 @@ def begin_room_link_retirement(
                ) VALUES (?, ?, ?, ?)""",
             (room_id, *lineage, timestamp),
         )
+        from gateway.hosted_room_replica_retirement import freeze_home_enrollments_locked
+        freeze_home_enrollments_locked(
+            conn, room_id=room_id, authority_gateway_id=authority_gateway_id, authority_epoch=authority_epoch)
         return {
             "room_id": room_id,
             "authority_gateway_id": lineage[0],
