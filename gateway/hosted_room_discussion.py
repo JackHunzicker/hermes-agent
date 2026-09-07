@@ -531,7 +531,12 @@ def _derive_member_watermarks(events: Sequence[_ValidatedEvent]) -> dict[tuple[s
             # user event. Do not let this Bot's later visible reply skip the
             # older attachment events that still need a bounded follow-up task.
             if watermark >= discussion_seq:
-                watermark = max(watermark, message.seq)
+                from gateway.hosted_room_event_policy import NOTICE_KINDS
+                # A reply cannot acknowledge inputs accepted while it was running.
+                unseen = [e.seq for e in events if watermark < e.seq < message.seq
+                          and e.payload.get("thread_id") == key[0]
+                          and e.kind in NOTICE_KINDS | {"message.participant"}]
+                watermark = min(unseen) - 1 if unseen else max(watermark, message.seq)
         watermarks[key] = max(watermarks.get(key, 0), watermark)
     return watermarks
 
@@ -722,7 +727,7 @@ def _thread_messages(
     thread_messages = tuple(
         event for event in validated
         if event.payload.get("thread_id") == thread_id and (
-            event.kind == "message.user"
+            event.kind in {"message.user", "message.participant"}
             or (event.kind == "message.member" and event.event_id in committed_member_message_ids)))
     return thread_messages, tuple(event for event in thread_messages if event.seq >= discussion.seq), tuple(
         event for event in thread_messages
@@ -759,7 +764,10 @@ def plan_next_task(
     decide = partial(
         DiscussionDecision, discussion_event_id=discussion.event_id, source_event_seq=discussion.seq,
         thread_id=thread_id)
-    thread_messages, discussion_messages, member_messages = _thread_messages(validated, discussion)
+    from gateway.hosted_room_history import policy_events
+    transcript = _validated_events(policy_events(events), room=room)
+    thread_messages, _, _ = _thread_messages(transcript, discussion)
+    _, discussion_messages, member_messages = _thread_messages(validated, discussion)
     if len(member_messages) >= MAX_DISCUSSION_MESSAGES:
         return decide("bounded", "max_messages")
     terminals = {
@@ -767,6 +775,15 @@ def plan_next_task(
         if event.kind in _TERMINAL_EVENT_KINDS and event.payload.get("discussion_event_id") == discussion.event_id}
     watermarks = _effective_watermarks(validated, initial_watermarks)
     maximum_seen_seq = max(event.seq for event in thread_messages)
+    from gateway.hosted_room_event_policy import NOTICE_KINDS
+    accepted_seqs = {event.seq for event in validated if event.payload.get("thread_id") == thread_id
+                     and event.kind in NOTICE_KINDS | {"message.participant"}}
+    mentioned_members = _unaddressed_member_mentions(discussion_messages, room)
+    # Tool handoffs use their frozen recipient IDs, not mutable text/handles.
+    handoff_targets = {target for event in validated if event.kind == "message.participant"
+        and event.payload.get("thread_id") == thread_id
+        for target in event.payload.get("mention_member_ids", ())
+        if target != event.payload.get("member_id") and event.seq > watermarks.get((thread_id, target), 0)}
     for round_index in range(MAX_DISCUSSION_ROUNDS):
         # The user's message selects the first round, with no mention meaning
         # everyone. Later rounds are opt-in: only a peer explicitly cited by a
@@ -775,7 +792,8 @@ def plan_next_task(
         # complete bounded transcript delta without consuming turns meanwhile.
         responders = (
             _policy_responders(str(discussion.payload["text"]), room.members, room.responder_policy) if round_index == 0
-            else _unaddressed_member_mentions(discussion_messages, room))
+            else tuple(member for member in room.members if member.member_id in handoff_targets
+                       or member in mentioned_members))
         for member_index, member in enumerate(_rotate(responders, round_index)):
             watermark = watermarks.get((thread_id, member.member_id), 0)
             pending_attachments = any(
@@ -783,8 +801,13 @@ def plan_next_task(
                 and event.payload.get("attachments") for event in thread_messages)
             if (round_index, member.member_id) in terminals and not pending_attachments:
                 continue
+            # Keep accepted corrections/handoffs in an oldest-first bounded input;
+            # never advance their watermark past lines omitted by prompt rendering.
+            pending = [event for event in thread_messages if event.seq > watermark]
+            if any(seq > watermark for seq in accepted_seqs):
+                pending = pending[:MAX_DISCUSSION_DELTA_LINES]
             seen_through_seq, delta, attachments = _bounded_task_delta(
-                thread_messages, watermark=watermark, maximum_seq=maximum_seen_seq)
+                pending, watermark=watermark, maximum_seq=maximum_seen_seq)
             if not delta:
                 continue
             prompt = _build_prompt(
@@ -796,7 +819,7 @@ def plan_next_task(
                 input_context=(validate_task_input({"watermark": watermark, "event_seqs": [event.seq for event in delta]})
                                if freeze_input_context else None),
                 session_scope=("thread_member_v1" if freeze_input_context and _peer_id(member) is None else None)))
-        if not any(int(event.payload["round_index"]) == round_index for event in member_messages):
+        if not handoff_targets and not any(int(event.payload["round_index"]) == round_index for event in member_messages):
             return decide("settled", "silent_round")
         if round_index == MAX_DISCUSSION_ROUNDS - 1:
             return decide("bounded", "max_rounds")

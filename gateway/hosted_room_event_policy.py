@@ -115,6 +115,9 @@ def apply_event(checkpoint, conn, event):
         conn.execute("DELETE FROM hosted_room_policy_events WHERE room_id=?", (event["room_id"],))
         return True
     if policy_for(conn, event["room_id"])["mode"] != "event_driven":
+        if event["kind"] == "message.participant" or event["kind"] in NOTICE_KINDS:
+            checkpoint._store_transcript_event(conn, event=event, thread_id=event["payload"]["thread_id"])
+            return True
         return False
     kind, payload, room_id = event["kind"], event["payload"], event["room_id"]
     thread_id = payload.get("thread_id")
@@ -150,10 +153,16 @@ def apply_event(checkpoint, conn, event):
     return True
 
 
-def augment_references(conn, room_id, events, thread_id):
+def augment_references(conn, room_id, events, thread_id, *, pending_kinds=None):
     """Retained terminals require their original source and message to validate replay."""
     by_seq = {e["seq"]: e for e in events}
-    for event in pending_events(conn, room_id, thread_id, limit=24):
+    # Legacy recipients can remain idle for different bounded discussions. Recover
+    # each recipient's oldest accepted tool/notice prefix, not only the slowest one.
+    recipients = [None] if pending_kinds is None else [m["member_id"] for m in json.loads(conn.execute(
+        "SELECT members_json FROM hosted_rooms WHERE room_id=?", (room_id,)).fetchone()[0])]
+    pending = [event for recipient in recipients for event in pending_events(
+        conn, room_id, thread_id, limit=24, kinds=pending_kinds, member_id=recipient)]
+    for event in pending:
         by_seq[event["seq"]] = event
         if event["kind"] == "message.member":
             row = conn.execute("SELECT * FROM hosted_room_events WHERE room_id=? AND kind='turn.settled' "
@@ -184,7 +193,7 @@ def require_input_capacity(conn, room_id, kind, payload):
         raise rooms.RoomConflictError("room input queue is full; wait for pending turns")
 
 
-def pending_events(conn, room_id, thread_id, *, limit, kinds=None):
+def pending_events(conn, room_id, thread_id, *, limit, kinds=None, member_id=None):
     """Recover the oldest unconsumed canonical references after checkpoint eviction."""
     policy = policy_for(conn, room_id)
     row = conn.execute("SELECT members_json FROM hosted_rooms WHERE room_id=?", (room_id,)).fetchone()
@@ -211,6 +220,8 @@ def pending_events(conn, room_id, thread_id, *, limit, kinds=None):
         targets = active if kind in NOTICE_KINDS else set(message.get("mention_member_ids", ())) | {
             _field(m, "member_id") for m in event_responders(message["text"], members, policy, default=kind == "message.user")}
         targets = (targets & active) - {message.get("member_id")}
+        if member_id is not None:
+            targets &= {member_id}
         if any(marks.get(target, 0) < event["seq"] for target in targets):
             result.append(event)
             if len(result) >= limit:

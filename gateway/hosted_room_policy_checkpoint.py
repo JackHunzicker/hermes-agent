@@ -20,7 +20,7 @@ from gateway.hosted_rooms_common import DbPath, compact_json, fenced_update
 
 MAX_ACTIVE_POLICY_EVENTS = 64
 MAX_THREAD_TRANSCRIPT_EVENTS = 24
-_TRANSCRIPT_SCHEMA_VERSION = 4
+_TRANSCRIPT_SCHEMA_VERSION = 5
 MAX_TRANSCRIPT_POLICY_EVENTS = MAX_THREAD_TRANSCRIPT_EVENTS * (MAX_ACTIVE_POLICY_EVENTS + 2)
 _TERMINAL_KINDS = frozenset({"turn.settled", "turn.failed", "turn.cancelled", "turn.deferred"})
 
@@ -141,9 +141,11 @@ class HostedRoomPolicyCheckpoint:
                ON CONFLICT(room_id, thread_id, seq) DO UPDATE SET
                    settled_seq=COALESCE(excluded.settled_seq, hosted_room_policy_transcript.settled_seq)""",
             (event["room_id"], thread_id, int(event["seq"]), str(event["kind"]), settled_seq))
-        if event["kind"] in {"message.user", "message.member"}:
+        from gateway.hosted_room_event_policy import MESSAGE_KINDS, NOTICE_KINDS
+        if event["kind"] in MESSAGE_KINDS | NOTICE_KINDS:
             cutoff = conn.execute("""SELECT seq FROM hosted_room_policy_transcript
-                   WHERE room_id=? AND thread_id=? AND kind IN ('message.user', 'message.member')
+                   WHERE room_id=? AND thread_id=? AND kind IN ('message.user', 'message.member', 'message.participant',
+                       'message.edited', 'message.deleted', 'message.reaction')
                    ORDER BY seq DESC LIMIT 1 OFFSET ?""",
                 (event["room_id"], thread_id, MAX_THREAD_TRANSCRIPT_EVENTS - 1)).fetchone()
             if cutoff is not None:
@@ -168,8 +170,9 @@ class HostedRoomPolicyCheckpoint:
             int(event["seq"]): event
             for event in (*map(_event_from_room_row, rows), *(json.loads(row["event_json"]) for row in active_rows))}
         result = [events_by_seq[seq] for seq in sorted(events_by_seq)]
-        from gateway.hosted_room_event_policy import policy_for, augment_references
-        return augment_references(conn, room_id, result, thread_id) if policy_for(conn, room_id)["mode"] == "event_driven" else result
+        from gateway.hosted_room_event_policy import policy_for, augment_references, NOTICE_KINDS
+        kinds = None if policy_for(conn, room_id)["mode"] == "event_driven" else NOTICE_KINDS | {"message.participant"}
+        return augment_references(conn, room_id, result, thread_id, pending_kinds=kinds)
 
     # -- per-kind projection handlers (dispatched by _apply_event) -----------
 
@@ -221,7 +224,11 @@ class HostedRoomPolicyCheckpoint:
             committed = _settled_message(conn, room_id, discussion_event_id, payload["message_event_id"])
             if committed is not None:
                 if source is not None and seen_through_seq >= int(source["seq"]):
-                    seen_through_seq = max(seen_through_seq, int(committed["seq"]))
+                    unseen = conn.execute("""SELECT MIN(seq) FROM hosted_room_events WHERE room_id=?
+                        AND json_extract(payload_json, '$.thread_id')=? AND seq>? AND seq<?
+                        AND kind IN ('message.participant','message.edited','message.deleted','message.reaction')""",
+                        (room_id, thread_id, seen_through_seq, int(committed["seq"]))).fetchone()[0]
+                    seen_through_seq = int(unseen) - 1 if unseen else max(seen_through_seq, int(committed["seq"]))
                 self._store_transcript_event(conn, event=committed, thread_id=thread_id, settled_seq=seq)
         else:
             # Non-visible receipts still supply historical reconstruction watermarks.

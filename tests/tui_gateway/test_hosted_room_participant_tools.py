@@ -37,7 +37,7 @@ def participant(tmp_path, monkeypatch, request):
         "execution_generation": attempt.execution_generation,
         "home_install_id": room["authority_gateway_id"], "target_install_id": room["authority_gateway_id"],
         "authority_gateway_id": room["authority_gateway_id"], "authority_epoch": room["authority_epoch"]}
-    session = {"source": "bot_room", "_hosted_room_task": scope, "_test_attempt": attempt}
+    session = {"source": "bot_room", "_hosted_room_task": scope, "_test_attempt": attempt, "_test_lease": lease}
     token = server._current_runtime_session_record.set(session)
     try:
         yield service, room, source, task, session
@@ -59,9 +59,79 @@ def test_default_room_delivers_accepted_participant_handoff(participant):
     binding = HostedRoomBinding(room["room_id"], room["authority_gateway_id"], room["authority_epoch"])
     service.prepare_room(binding)
     tasks = driver.list_tasks(service.db_path, room_id=room["room_id"], status="queued")
-    print("Accepted participant event:", sent["event"]["event_id"], "queued recipients:", [t["payload"]["target_member_id"] for t in tasks])
     assert any(t["payload"]["target_member_id"] == "default" and "inspect the handoff" in t["payload"]["prompt"] for t in tasks), \
         "Accepted @default participant handoff was not delivered in the default room policy"
+    driver.release_lease(service.db_path, session["_test_lease"], clock=time.time)
+    from tests.tui_gateway.test_hosted_room_mutation_runtime import NoticeRPC, configure
+    from tests.tui_gateway.hosted_room_service_fixtures import _wait_for
+    from gateway.hosted_room_discussion import reconstruct_task_plan
+    reopened = HostedRoomService(_server(), db_path=service.db_path)
+    reopened.local_profiles = service.local_profiles
+    frozen = tasks[0]
+    events = reopened.policy_checkpoint.events_for_task(room_id=room["room_id"],
+        source_event_seq=frozen["payload"]["source_event_seq"], input_context=frozen["payload"]["input_context"])
+    rebuilt = reconstruct_task_plan(room, events, frozen, local_profiles=reopened.local_profiles())
+    assert rebuilt.payload == frozen["payload"]
+    rpc = NoticeRPC()
+    configure(reopened, rpc)
+    reopened.start()
+    try:
+        _wait_for(lambda: len(rpc.calls) == 1 and not reopened.status(room["room_id"])["working"], timeout=10)
+    finally:
+        assert reopened.stop(timeout=3)
+    assert rpc.calls[0]["profile"] == "default"
+    records = [json.loads(line) for line in rpc.calls[0]["prompt"].splitlines() if line.strip().startswith('{')]
+    handoff = next(record for record in records if record["event_id"] == sent["event"]["event_id"])
+    assert handoff["actor"] == sent["event"]["actor"]
+    assert handoff["content"] == "@ops: @default inspect the handoff"
+    for _ in range(3):
+        reopened.prepare_room(binding)
+    assert not driver.list_tasks(service.db_path, room_id=room["room_id"], status="queued")
+    assert rooms.room_state(service.db_path, room_id=room["room_id"])["responder_policy"] == room["responder_policy"]
+
+
+def test_legacy_tool_handoff_chain_retains_round_bound_and_pending_delivery(participant):
+    from gateway.hosted_room_discussion import MAX_DISCUSSION_ROUNDS, MAX_DISCUSSION_MEMBERS
+    service, room, _, task, session = participant
+    binding = HostedRoomBinding(room["room_id"], room["authority_gateway_id"], room["authority_epoch"])
+    admitted = []
+    for index in range(MAX_DISCUSSION_ROUNDS * MAX_DISCUSSION_MEMBERS + 1):
+        member = task["payload"]["target_member_id"]
+        target = "default" if member == "ops" else "ops"
+        args = dict(operation="send", event_id=f"handoff-{index}", text=f"handoff {index}", mention_member_ids=[target])
+        sent = call(**args)
+        assert sent["ok"] is True, sent
+        assert call(**args)["event"]["event_id"] == sent["event"]["event_id"]
+        driver.settle_task(service.db_path, session["_test_attempt"], settlement_id=f"done-{index}",
+            status="settled", result={"text": "PASS"}, clock=time.time)
+        admitted.append(task)
+        service.prepare_room(binding)
+        queued = driver.list_tasks(service.db_path, room_id=room["room_id"], status="queued")
+        if not queued:
+            break
+        task = queued[0]
+        assert task["payload"]["target_member_id"] == target
+        assert f"handoff {index}" in task["payload"]["prompt"]
+        attempt = driver.start_task(service.db_path, task["identity"], session["_test_lease"],
+            expected_cancel_generation=task["cancel_generation"], clock=time.time)
+        session["_test_attempt"] = attempt
+        session["_hosted_room_task"] = {**session["_hosted_room_task"],
+            "task_id": task["identity"].task_id, "turn_id": task["identity"].turn_id,
+            "member_id": target, "target_profile": target, "execution_generation": attempt.execution_generation}
+    else:
+        pytest.fail("participant handoffs escaped the legacy round bound")
+    events = service._events(room["room_id"])
+    terminals = [event for event in events if event["kind"] == "turn.settled"]
+    assert max(e["payload"]["round_index"] for e in terminals) < MAX_DISCUSSION_ROUNDS
+    assert len({(e["payload"]["round_index"], e["payload"]["member_id"]) for e in terminals}) == len(admitted)
+    assert any(e["kind"] == "room.activity" and e["payload"]["status"] == "bounded" for e in events)
+    for _ in range(3):
+        service.prepare_room(binding)
+    assert not driver.list_tasks(service.db_path, room_id=room["room_id"], status="queued")
+    service.send(room_id=room["room_id"], event_id="continue-bounded", payload={"text": f"@{target} continue", "thread_id": "thread-tools"})
+    queued = driver.list_tasks(service.db_path, room_id=room["room_id"], status="queued")
+    assert queued[0]["payload"]["target_member_id"] == target
+    assert sent["event"]["seq"] in queued[0]["payload"]["input_context"]["event_seqs"]
 
 
 def test_participant_registry_send_is_attributed_idempotent_and_attempt_fenced(participant):
