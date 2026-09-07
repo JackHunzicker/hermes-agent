@@ -7,8 +7,9 @@ import binascii
 import json
 import logging
 import os
+import shlex
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from gateway.hosted_room_artifacts import (
     RoomArtifactError,
@@ -150,11 +151,14 @@ SHARE_GROUP_FILE_SCHEMA = {
 }
 
 
-def _requested_file_path(value: str) -> Path:
+def _requested_file_path(value: str, *, remote: bool = False) -> Path | PurePosixPath | PureWindowsPath:
     candidate = str(value or "").strip()
     if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in "`\"'":
         candidate = candidate[1:-1].strip()
     candidate = candidate.lstrip("`\"'").rstrip("`\"',.;:)}]")
+    if remote:
+        windows_path = PureWindowsPath(candidate)
+        return windows_path if windows_path.is_absolute() else PurePosixPath(candidate)
     return Path(candidate).expanduser()
 
 
@@ -302,7 +306,7 @@ def _store_open_group_file(
 def _store_backend_group_file(
     *,
     scope: RoomArtifactScope,
-    path: Path,
+    path: PurePosixPath | PureWindowsPath,
     task_id: str,
     name: str | None,
 ) -> dict[str, object]:
@@ -311,9 +315,10 @@ def _store_backend_group_file(
     from agent.file_safety import get_read_block_error
     from hermes_constants import get_hermes_home
     from tools.file_tools import _get_file_ops
-    from tools.file_tools_paths import _resolve_path_for_task
 
-    resolved = _resolve_path_for_task(str(path), task_id)
+    # The public tool requires an absolute path in the backend namespace.
+    # Resolving it with the host OS can rewrite SSH paths on a Windows host.
+    resolved = str(path)
     if _is_private_room_storage_path(Path(str(resolved))):
         raise RoomArtifactError("Private Group Chat storage cannot be shared.")
     if _is_sensitive_remote_path(resolved) or get_read_block_error(str(resolved)):
@@ -327,7 +332,7 @@ def _store_backend_group_file(
     return RoomArtifactOutbox(Path(get_hermes_home()) / "state.db").put_bytes(
         scope=scope,
         data=data,
-        source_name=Path(str(resolved)).name,
+        source_name=path.name,
         name=name,
     )
 
@@ -335,17 +340,21 @@ def _store_backend_group_file(
 def _read_backend_file_bytes_nofollow(file_ops, path: str) -> bytes:
     """Read one bounded backend file without following any path component."""
 
-    python = "python3" if file_ops._has_command("python3") else "python"
-    command = " ".join((
-        python,
-        "-c",
-        file_ops._escape_shell_arg(_REMOTE_FILE_READER),
-        file_ops._escape_shell_arg(path),
-        str(MAX_ATTACHMENT_BYTES),
-    ))
-    result = file_ops._exec(command, timeout=60)
-    marker_at = result.stdout.rfind(_REMOTE_FILE_MARKER)
-    if result.exit_code != 0 or marker_at < 0:
+    # A discovered python3 may be a non-working Windows Store alias. Retry
+    # python only when no reader result was produced, never on a denied file.
+    for python in ("python3", "python"):
+        command = " ".join((
+            python,
+            "-c",
+            shlex.quote(_REMOTE_FILE_READER),
+            shlex.quote(path),
+            str(MAX_ATTACHMENT_BYTES),
+        ))
+        result = file_ops._exec(command, timeout=60)
+        marker_at = result.stdout.rfind(_REMOTE_FILE_MARKER)
+        if result.exit_code == 0 and marker_at >= 0:
+            break
+    else:
         raise RoomArtifactError(
             "That file cannot be shared from the active execution environment."
         )
@@ -385,7 +394,8 @@ def share_group_file(
         from gateway.session_context import get_session_env
         from tools.file_tools_paths import _terminal_env_type_for_task
 
-        requested = _requested_file_path(path)
+        remote = _terminal_env_type_for_task(task_id) != "local"
+        requested = _requested_file_path(path, remote=remote)
         if scope.as_mapping().get("kind") == "classic" and (
             _is_sensitive_remote_path(requested)
             or requested.name.casefold() in {"state.db", "state.db-wal", "state.db-shm", "config.yaml"}
@@ -395,7 +405,7 @@ def share_group_file(
             raise RoomArtifactError(
                 "That file cannot be shared. Move it to the workspace or a Hermes media folder and try again."
             )
-        if _terminal_env_type_for_task(task_id) != "local":
+        if remote:
             stored = _store_backend_group_file(
                 scope=scope,
                 path=requested,

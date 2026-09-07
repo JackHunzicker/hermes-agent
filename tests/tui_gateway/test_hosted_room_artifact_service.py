@@ -54,7 +54,7 @@ class _ArtifactRPC(_FakeRPC):
         self.thread_id = ""
         self.shared_threads: set[str] = set()
         self.output = db_path.parent / "handoff.md"
-        self.output.write_text("# Review handoff\n", encoding="utf-8")
+        self.output.write_bytes(b"# Review handoff\n")
 
     def bind_artifact_scope(self, **kwargs):
         installation = hosted_rooms.local_authority_gateway_id()
