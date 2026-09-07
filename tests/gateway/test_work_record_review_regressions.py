@@ -33,11 +33,13 @@ def make_publisher(source, monkeypatch):
 @pytest.mark.parametrize(("both_revoked", "boundary"), [
     (False, "normal"), (True, "normal"), (False, "history_unavailable"),
     (False, "work_unavailable"), (False, "route_replaced"), (False, "midpoint_migration"),
+    (False, "both_unavailable"),
 ])
 async def test_work_refusal_selects_alternate_and_remembers_each_generation(setup, monkeypatch, both_revoked, boundary):
     source, target, app = setup
     requests = []
     fail_alpha = False
+    beta_recovered = False
     for route in list(app.router.routes()):
         if route.resource.canonical.startswith("/v1/room-members/"):
             app.router.add_route(route.method, "/p/{profile}" + route.resource.canonical, route.handler)
@@ -45,7 +47,10 @@ async def test_work_refusal_selects_alternate_and_remembers_each_generation(setu
     async def profile_scope(request, handler):
         token = api_server._api_request_profile.set(request.match_info.get("profile"))
         try:
-            if fail_alpha and boundary == "work_unavailable" and request.path == "/p/alpha/v1/room-members/work-records":
+            retry_failure = fail_alpha and request.path.endswith("work-records") and (
+                (boundary == "work_unavailable" and request.match_info.get("profile") == "alpha")
+                or (boundary == "both_unavailable" and (request.match_info.get("profile") == "alpha" or not beta_recovered)))
+            if retry_failure:
                 response = web.json_response({"error": {"code": "unavailable"}}, status=503)
             else:
                 response = await handler(request)
@@ -89,7 +94,7 @@ async def test_work_refusal_selects_alternate_and_remembers_each_generation(setu
         pub = make_publisher(source, monkeypatch)
         await asyncio.to_thread(pub._publish_one, ("room", "alpha"))
         await asyncio.to_thread(pub._publish_one, ("room", "alpha"))
-        rejected = () if boundary == "work_unavailable" else ("alpha", "beta") if both_revoked else ("alpha",)
+        rejected = () if boundary in {"work_unavailable", "both_unavailable"} else ("alpha", "beta") if both_revoked else ("alpha",)
         for profile in rejected:
             claims = peer.decode_room_grant(secret, grants[profile], permission=records.PERMISSION)
             rooms.revoke_room_grant_scope(target, claims=claims, expires_at=claims["status_expires_at"])
@@ -107,6 +112,10 @@ async def test_work_refusal_selects_alternate_and_remembers_each_generation(setu
             with sqlite3.connect(source) as conn:
                 conn.execute("ALTER TABLE hosted_room_replication_publishers DROP COLUMN work_record_status")
             pub = make_publisher(source, monkeypatch)
+        if boundary == "both_unavailable":
+            await asyncio.to_thread(pub._publish_one, ("room", "beta"))
+            assert {r["work_record_status"] for r in pub.status()["routes"]} == {"unavailable"}
+            beta_recovered = True
         # Another task-only change cannot replace the unresolved whole record.
         driver.begin_task_cancel(source, TASK, cancel_id="stop", expected_cancel_generation=0, clock=lambda: 100)
         await asyncio.to_thread(pub._publish_one, ("room", "beta"))

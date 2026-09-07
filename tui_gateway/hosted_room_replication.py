@@ -395,9 +395,12 @@ class HostedRoomReplicationPublisher:
                 work_rank = 2 if opted_in and refused else 0 if opted_in else 1
                 unavailable = checkpoint["status"] == "unavailable"
                 work_unavailable = checkpoint["work_record_status"] == "unavailable"
-                rank = (unavailable, work_rank, work_unavailable) if history_needed else (work_rank, work_unavailable, unavailable)
+                # Equal transient work failures must get their existing queue
+                # turns; a stable member key otherwise pins retries to one peer.
+                turn_rank = route.key != initial.key if work_rank == 0 and work_unavailable else False
+                rank = (unavailable, work_rank, work_unavailable, False) if history_needed else (work_rank, work_unavailable, turn_rank, unavailable)
                 selected.append((*rank, route.key, route))
-        return min(selected, key=lambda item: item[:4])[4] if selected else None
+        return min(selected, key=lambda item: item[:5])[5] if selected else None
 
     def _target_checkpoint(self, route: _Route) -> dict | None:
         lineage = _digest([route.room["authority_gateway_id"], route.room["authority_epoch"], route.room["members"]])
