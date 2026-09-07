@@ -368,7 +368,7 @@ def discard_retired_locked(conn, room_id):
 
 
 def prepare_delivery_locked(conn, *, room_id, target_install_id, route_generation, local_gateway_id, through_seq):
-    """Keep the unresolved payload across process restarts and scoped-grant replacement."""
+    """Freeze a source view now; expose it only after its history is acknowledged."""
     initialize(conn)
     key = (room_id, target_install_id)
     old = conn.execute(f"SELECT * FROM {PENDING_TABLE} WHERE room_id=? AND target_install_id=?", key).fetchone()
@@ -382,16 +382,16 @@ def prepare_delivery_locked(conn, *, room_id, target_install_id, route_generatio
                 or record["roster_sha256"] != roster_digest(json.loads(current["members_json"]))):
             raise WorkRecordError("pending work record source changed")
     else:
-        record = capture_locked(conn, room_id=room_id, local_gateway_id=local_gateway_id, through_seq=through_seq)
+        record = capture_locked(conn, room_id=room_id, local_gateway_id=local_gateway_id)
         if old is not None and (old["revision"], old["digest"]) == (record["revision"], record["digest"]):
             return None
-    if record["history"]["seq"] > through_seq:
-        raise WorkRecordPrefixError("pending work record awaits history")
     data = encode(record)
     _budget(conn, PENDING_TABLE, room_id, data, target_install_id)
     conn.execute(f"INSERT OR REPLACE INTO {PENDING_TABLE} VALUES (?,?,?,?,?,?,?)",
                  (*key, route_generation, record["revision"], record["digest"], data, "pending"))
-    return record
+    # Persist the anchor even while history is behind. Recapturing the moving
+    # source tip on each attempt can otherwise starve a busy group indefinitely.
+    return record if record["history"]["seq"] <= through_seq else None
 
 
 def delivery_status_locked(conn, *, room_id, target_install_id, route_generation, record, status):
