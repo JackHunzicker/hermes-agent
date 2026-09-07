@@ -79,9 +79,41 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByRole('textbox', { name: 'Message Other' })).toHaveValue('')
   await page.screenshot({ path: path.join(output, 'other-room-isolated.png'), fullPage: true })
+  await page.evaluate(() => window.parityFixture.historyControls())
+  await page.keyboard.press('Escape')
+  const captures = []
+  for (const [theme, width] of [['light', 1100], ['dark', 1100], ['dark', 720]]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.emulateMedia({ colorScheme: theme })
+    await expect(page.locator('html')).toHaveAttribute('data-hermes-mode', theme)
+    await expect(page.getByRole('textbox', { name: 'Search room history' })).toBeVisible()
+    await page.getByRole('textbox', { name: 'Search room history' }).fill('original')
+    for (const name of ['Stop', 'Search', 'Mark room read', 'Edit message', 'Delete message', 'Add thumbs up', 'Stop this thread', 'Mark thread read']) {
+      await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
+    }
+    await expect(page.getByText('1 unread', { exact: true })).toBeVisible()
+    const prefix = `history-${theme}-${width}`
+    await page.screenshot({ path: path.join(output, `${prefix}.png`), fullPage: true })
+    await page.getByRole('button', { name: 'Edit message', exact: true }).click()
+    await expect(page.getByRole('textbox', { name: 'Edit message' })).toHaveValue('Please review the original image.')
+    await page.screenshot({ path: path.join(output, `${prefix}-edit.png`), fullPage: true })
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await page.getByRole('button', { name: 'Delete message', exact: true }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.screenshot({ path: path.join(output, `${prefix}-delete.png`), fullPage: true })
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'Stop this thread', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Confirm thread stop' })).toBeVisible()
+    await page.screenshot({ path: path.join(output, `${prefix}-thread-stop.png`), fullPage: true })
+    await page.keyboard.press('Escape')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    captures.push({ theme, width, height: 900, states: ['controls', 'edit', 'delete confirmation', 'thread stop confirmation'] })
+  }
   expect(errors).toEqual([])
   const receipt = {
     result: 'passed',
+    captures,
+    unqualified: ['live gateway', 'model execution', 'native device', 'room/thread policy controls absent from recovered source'],
     scope: 'Real Chrome / production React components; fixture state, no backend/model execution',
     checks: [
       'exact hosted member handle',
@@ -89,7 +121,10 @@ try {
       '2048px image exact byte and dimension preservation',
       'native file picker attachment chip',
       'retry confirmation visible across status update',
-      'retry dismissed on room switch'
+      'retry dismissed on room switch',
+      'history search, read, edit, delete, reaction and scoped thread controls visible in three viewports',
+      'edit text and destructive confirmation rendered with production primitives',
+      'no document horizontal overflow in narrow desktop viewport'
     ],
     image: { exactBytes: media.exactBytes, width: media.width, height: media.height },
     errors
