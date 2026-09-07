@@ -95,3 +95,28 @@ async def test_lost_http_ack_and_publisher_restart_preserve_history(setup, monke
         finally:
             for publisher in publishers:
                 assert await asyncio.to_thread(publisher.stop, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_replica_capacity_recovers_without_new_authorization(setup, monkeypatch):
+    source, target, app = setup
+    async with TestClient(TestServer(app)) as http:
+        token = await invite(http, replication=True)
+        client = PeerRunsHTTPClient(base_url=str(http.make_url("/")), api_key="", timeout_seconds=3)
+        probe = await asyncio.to_thread(client.probe, grant=token)
+        links.save_room_link(source, links.make_stored_link(
+            room_id="room", member_id="reviewer", target_url=str(http.make_url("/")),
+            target_profile="default", grant=token,
+            catalog=peer.GatewayRoomCatalog.from_mapping(probe["catalog"]),
+            cancellation_scope_id="test-cancel", trace_id="test-trace",
+        ))
+        publisher = make_publisher(source, monkeypatch)
+        with monkeypatch.context() as limited:
+            limited.setattr(replicas, "MAX_REPLICA_EVENT_BYTES", 1)
+            await asyncio.to_thread(publisher._publish_one, ("room", "reviewer"))
+        state = publisher.status("room")["routes"][0]
+        assert state["status"] == "unavailable"
+        assert state["acked_seq"] == 0
+        await asyncio.to_thread(publisher._publish_one, ("room", "reviewer"))
+        assert publisher.status("room")["routes"][0]["status"] == "acked"
+        assert replicas.replica_state(target, room_id="room")["last_seq"] == 1
