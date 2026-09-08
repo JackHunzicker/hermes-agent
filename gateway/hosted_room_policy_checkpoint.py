@@ -20,7 +20,7 @@ from gateway.hosted_rooms_common import DbPath, compact_json, fenced_update
 
 MAX_ACTIVE_POLICY_EVENTS = 64
 MAX_THREAD_TRANSCRIPT_EVENTS = 24
-_TRANSCRIPT_SCHEMA_VERSION = 5
+_TRANSCRIPT_SCHEMA_VERSION = 6
 MAX_TRANSCRIPT_POLICY_EVENTS = MAX_THREAD_TRANSCRIPT_EVENTS * (MAX_ACTIVE_POLICY_EVENTS + 2)
 _TERMINAL_KINDS = frozenset({"turn.settled", "turn.failed", "turn.cancelled", "turn.deferred"})
 
@@ -403,9 +403,21 @@ class HostedRoomPolicyCheckpoint:
                 bound_error="active room policy projection exceeded its bound")
             watermark_rows = conn.execute("""SELECT member_id, seen_through_seq FROM hosted_room_policy_watermarks
                    WHERE room_id=? AND thread_id=?""", (room_id, thread_id)).fetchall()
+            watermarks = {(thread_id, str(row["member_id"])): int(row["seen_through_seq"]) for row in watermark_rows}
+            from gateway.hosted_room_event_policy import policy_for
+            if policy_for(conn, room_id)["mode"] == "event_driven":
+                # The bounded snapshot omits policy events. Carry their input floor
+                # separately so restored pre-policy sources remain identity-only.
+                floor = conn.execute("SELECT MAX(seq) FROM hosted_room_events WHERE room_id=? "
+                    "AND kind='room.policy_changed' AND seq<=?", (room_id, through_seq)).fetchone()[0] or 0
+                members = json.loads(conn.execute("SELECT members_json FROM hosted_rooms WHERE room_id=?",
+                                                  (room_id,)).fetchone()[0])
+                for member in members:
+                    key = (thread_id, member["member_id"])
+                    watermarks[key] = max(watermarks.get(key, 0), int(floor))
         return PolicySnapshot(
             through_seq=through_seq, stopped_through_seq=stopped_through_seq, events=tuple(events),
-            watermarks={(thread_id, str(row["member_id"])): int(row["seen_through_seq"]) for row in watermark_rows})
+            watermarks=watermarks)
 
     def publication_exists(self, *, room_id: str, task_id: str, status: str, execution_generation: int) -> bool:
         """Return whether one exact driver outcome is already in the room log."""

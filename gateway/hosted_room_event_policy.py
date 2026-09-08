@@ -46,7 +46,7 @@ def plan(room, events, *, initial_watermarks, freeze_input_context):
     stopped = max((e.seq for e in raw if e.kind == "room.stop_requested"), default=0)
     thread_stops = {str(e.payload["thread_id"]): e.seq for e in raw if e.kind == "thread.stop_requested"}
     policy_seq = max((e.seq for e in raw if e.kind == "room.policy_changed"), default=0)
-    sources = {str(e.payload["thread_id"]): e for e in raw if e.kind == "message.user" and e.seq > policy_seq}
+    sources = {str(e.payload["thread_id"]): e for e in raw if e.kind == "message.user"}
     committed = {str(e.payload["message_event_id"]) for e in raw if e.kind == "turn.settled" and e.payload.get("message_event_id")}
     watermarks = dict(initial_watermarks or {})
     for event in raw:
@@ -56,15 +56,17 @@ def plan(room, events, *, initial_watermarks, freeze_input_context):
     idle = None
     for source in sorted(sources.values(), key=lambda e: e.seq):
         thread_id = str(source.payload["thread_id"])
-        routing_floor = max(stopped, thread_stops.get(thread_id, 0), policy_seq)
-        if source.seq <= routing_floor:
+        stop_floor = max(stopped, thread_stops.get(thread_id, 0))
+        routing_floor = max(stop_floor, policy_seq)
+        # Policy changes retire input, not the durable identity of its thread.
+        if source.seq <= stop_floor:
             continue
         decide = partial(d.DiscussionDecision, discussion_event_id=source.event_id, source_event_seq=source.seq, thread_id=thread_id)
         messages = tuple(e for e in validated if e.payload.get("thread_id") == thread_id and
                          (e.kind in {"message.user", "message.participant"} or e.kind == "message.member" and e.event_id in committed))
         candidates = []
         for member_index, member in enumerate(room.members):
-            watermark = watermarks.get((thread_id, member.member_id), 0)
+            watermark = max(watermarks.get((thread_id, member.member_id), 0), routing_floor)
             targets = []
             for event in messages:
                 if event.seq <= max(watermark, routing_floor) or event.payload.get("member_id") == member.member_id:
@@ -140,6 +142,7 @@ def apply_event(checkpoint, conn, event):
             conn.execute("UPDATE hosted_room_policy_watermarks SET seen_through_seq=? WHERE room_id=? AND thread_id=? AND member_id=?",
                          (max(int(previous[0]) if previous else 0, int(payload["seen_through_seq"])), room_id, thread_id, payload["member_id"]))
     elif kind == "message.participant" or kind in NOTICE_KINDS:
+        _restore_source(checkpoint, conn, event)
         checkpoint._store_transcript_event(conn, event=event, thread_id=thread_id)
     else:
         return False
@@ -151,6 +154,24 @@ def apply_event(checkpoint, conn, event):
                      (room_id, thread_id, fence))
     _trim(checkpoint, conn, room_id, thread_id)
     return True
+
+
+def _restore_source(checkpoint, conn, event):
+    """Recover one identity anchor after policy reset without reviving stopped work."""
+    room_id, thread_id = event["room_id"], event["payload"]["thread_id"]
+    if conn.execute("SELECT 1 FROM hosted_room_policy_threads WHERE room_id=? AND thread_id=?",
+                    (room_id, thread_id)).fetchone():
+        return
+    from gateway.hosted_room_scoped_controls import thread_stop_seq
+    cursor = conn.execute("SELECT stopped_through_seq FROM hosted_room_policy_cursors WHERE room_id=?",
+                          (room_id,)).fetchone()
+    fence = max(int(cursor[0]) if cursor else 0, thread_stop_seq(conn, room_id, thread_id))
+    source = conn.execute("""SELECT * FROM hosted_room_events WHERE room_id=? AND kind='message.user'
+        AND json_extract(payload_json, '$.thread_id')=? AND seq>? AND seq<? ORDER BY seq DESC LIMIT 1""",
+        (room_id, thread_id, fence, event["seq"])).fetchone()
+    if source is not None:
+        source = rooms._event_from_row(source)
+        checkpoint._apply_user_message(conn, source, source["payload"])
 
 
 def augment_references(conn, room_id, events, thread_id, *, pending_kinds=None):
