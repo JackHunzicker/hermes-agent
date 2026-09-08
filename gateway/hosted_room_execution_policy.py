@@ -48,7 +48,7 @@ class RoomExecutionPolicy:
         if not isinstance(raw_toolsets, list) or not 1 <= len(raw_toolsets) <= MAX_POLICY_TOOLSETS:
             raise RoomExecutionPolicyError("enabled_toolsets are invalid")
         toolsets = tuple(sorted(_identifier(item, field="enabled_toolset") for item in raw_toolsets))
-        if len(set(toolsets)) != len(toolsets) or "bot_room" not in toolsets:
+        if len(set(toolsets)) != len(toolsets) or not {"bot_room", "bot_room_peer"}.intersection(toolsets):
             raise RoomExecutionPolicyError("enabled_toolsets are invalid")
         approval_mode = str(value["approval_mode"] or "").strip().lower()
         if approval_mode not in {"manual", "smart", "off"}:
@@ -79,7 +79,8 @@ def execution_policy_mapping(*, target_profile: str, config: Mapping[str, Any] |
     from hermes_cli.tools_config import _get_platform_tools
     from tools.approval import _YOLO_MODE_FROZEN
     from tools.approval_context import _normalize_approval_mode
-    toolsets = sorted({*_get_platform_tools(dict(config), "api_server"), "bot_room"})
+    # Peer agents retain artifact publication, not local-only participant RPCs.
+    toolsets = sorted(({*_get_platform_tools(dict(config), "api_server")} - {"bot_room"}) | {"bot_room_peer"})
     agent = config.get("agent") if isinstance(config.get("agent"), Mapping) else {}
     approvals = config.get("approvals") if isinstance(config.get("approvals"), Mapping) else {}
     unsigned = {

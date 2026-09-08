@@ -72,7 +72,11 @@ def _dispatch(policy: dict) -> HostedMemberDispatch:
 def test_execution_policy_digest_covers_tools_approvals_and_iteration_limit():
     value = _policy()
     checked = RoomExecutionPolicy.from_mapping(value)
-    assert "bot_room" in checked.enabled_toolsets
+    from model_tools import get_tool_definitions
+    names = {tool["function"]["name"] for tool in get_tool_definitions(
+        enabled_toolsets=checked.enabled_toolsets, quiet_mode=True)}
+    assert "share_group_file" in names
+    assert "group_room" not in names
 
     for field, replacement in (
         ("enabled_toolsets", ["bot_room"]),

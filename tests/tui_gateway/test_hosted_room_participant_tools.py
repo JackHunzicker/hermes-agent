@@ -134,6 +134,21 @@ def test_legacy_tool_handoff_chain_retains_round_bound_and_pending_delivery(part
     assert sent["event"]["seq"] in queued[0]["payload"]["input_context"]["event_seqs"]
 
 
+def test_peer_policy_excludes_local_participant_schema(participant, monkeypatch):
+    from gateway.hosted_room_execution_policy import execution_policy_mapping
+    from tools import approval
+    monkeypatch.setattr(approval, "_YOLO_MODE_FROZEN", False)
+    policy = execution_policy_mapping(target_profile="ops", config={
+        "platform_toolsets": {"api_server": ["terminal", "bot_room"]}, "approvals": {"mode": "manual"}})
+    peer_names = {t["function"]["name"] for t in get_tool_definitions(
+        enabled_toolsets=policy["enabled_toolsets"], quiet_mode=True)}
+    assert "group_room" not in peer_names
+    assert "share_group_file" in peer_names
+    assert "group_room" in {t["function"]["name"] for t in get_tool_definitions(
+        enabled_toolsets=server._load_enabled_toolsets("bot_room"), quiet_mode=True)}
+    assert call(operation="members")["ok"] is True
+
+
 def test_participant_registry_send_is_attributed_idempotent_and_attempt_fenced(participant, monkeypatch):
     service, room, source, task, session = participant
     definitions = get_tool_definitions(enabled_toolsets=["bot_room"], quiet_mode=True)
