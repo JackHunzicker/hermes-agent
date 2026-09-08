@@ -1446,7 +1446,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
       threadRows.push(renderEntry(entry, index))
     }
 
-    if (room.hostedHistory) {threadRows.push(<HostedThreadActions capability={capability} group={group} key={`${room.roomId}:${id}:controls`} thread={id} throughSeq={room.hostedHistory.snapshotSeq} />)}
+    if (room.hostedHistory) {threadRows.push(<HostedThreadActions capability={capability} group={group} key={`${room.hostedConnectionId}:${room.hostedEpoch}:${room.roomId}:${id}:controls`} roomId={room.roomId || undefined} thread={id} throughSeq={room.hostedHistory.snapshotSeq} />)}
 
     // Reply-in-thread: the newest thread's continuation ALSO lives here, so
     // the main composer below can stay "new thread" without ambiguity.

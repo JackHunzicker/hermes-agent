@@ -306,6 +306,43 @@ type BotsMessages = {
     asks: (handle: string) => string
     answerTo: (member: string) => string
   }
+  /** Canonical hosted-room responder policy controls. */
+  policy: {
+    roomAction: string
+    threadAction: string
+    roomContext: (group: string) => string
+    threadContext: (thread: string, group: string) => string
+    roomId: (id: string) => string
+    threadReadOnly: string
+    roomHint: string
+    peerReadOnly: string
+    revision: (revision: number) => string
+    continuationMode: string
+    legacyBounded: string
+    eventDriven: string
+    defaultResponder: string
+    allMembers: string
+    leader: string
+    mentionsOnly: string
+    leaderMember: string
+    noLeader: string
+    maxTurns: string
+    windowSeconds: string
+    reading: string
+    unavailableTitle: string
+    verified: string
+    reload: string
+    save: string
+    roomChanged: string
+    authorityUnavailable: string
+    hostUpdateRequired: string
+    invalidPolicy: string
+    invalidResponse: string
+    peerUnsupported: string
+    readFailed: string
+    saveFailed: string
+    verificationFailed: string
+  }
   /** Skills hub + MCP setup surfaces embedded in the bot editor. */
   tools: {
     skillsHub: string
@@ -628,6 +665,43 @@ const en: BotsMessages = {
     asks: handle => `@${handle} asks:`,
     answerTo: member => `Answer @${member}`
   },
+  policy: {
+    roomAction: 'Responder policy',
+    threadAction: 'Thread responder policy',
+    roomContext: group => `Room defaults · ${group}`,
+    threadContext: (thread, group) => `Thread ${thread} · ${group}`,
+    roomId: id => `Room ID: ${id}`,
+    threadReadOnly:
+      'This host supports room defaults only. Thread overrides are unavailable; the room policy below is read-only.',
+    roomHint: 'Applies room-wide to future responses. Stop outstanding room work before changing policy.',
+    peerReadOnly: 'Peer policy replication is unsupported by this host. This policy is read-only.',
+    revision: revision => `Canonical room revision ${revision}`,
+    continuationMode: 'Continuation mode',
+    legacyBounded: 'Legacy bounded',
+    eventDriven: 'Event driven',
+    defaultResponder: 'Default responder',
+    allMembers: 'All members',
+    leader: 'Leader',
+    mentionsOnly: 'Mentions only',
+    leaderMember: 'Leader member',
+    noLeader: 'No leader',
+    maxTurns: 'Maximum turns per window',
+    windowSeconds: 'Window seconds',
+    reading: 'Reading or verifying canonical policy',
+    unavailableTitle: 'Responder policy unavailable',
+    verified: 'Verified: canonical room policy reloaded.',
+    reload: 'Reload canonical policy',
+    save: 'Save room defaults',
+    roomChanged: 'Room changed; reopen responder policy.',
+    authorityUnavailable: 'Room authority unavailable.',
+    hostUpdateRequired: 'Update the room host to manage responder policy.',
+    invalidPolicy: 'Choose a valid policy, leader, turn limit (1–32), and window (1–3600 seconds).',
+    invalidResponse: 'The room host returned an invalid canonical policy.',
+    peerUnsupported: 'Peer responder policy replication is unsupported by this host.',
+    readFailed: 'Could not load canonical room policy. Check the room connection and try again.',
+    saveFailed: 'Could not save room policy. Stop outstanding room work, reload, and try again.',
+    verificationFailed: 'The policy may have changed, but Desktop could not verify it. Reload before editing.'
+  },
   tools: {
     skillsHub: 'Hermes Skills Hub',
     filterSkills: 'Filter skills…',
@@ -944,6 +1018,43 @@ const ja: BotsMessages = {
     asks: handle => `@${handle}からの質問:`,
     answerTo: member => `@${member}に回答`
   },
+  policy: {
+    roomAction: '応答ポリシー',
+    threadAction: 'スレッドの応答ポリシー',
+    roomContext: group => `ルーム既定値 · ${group}`,
+    threadContext: (thread, group) => `スレッド ${thread} · ${group}`,
+    roomId: id => `ルーム ID: ${id}`,
+    threadReadOnly:
+      'このホストはルームの既定値のみをサポートしています。スレッド単位の上書きは利用できないため、以下のポリシーは読み取り専用です。',
+    roomHint: '今後の応答にルーム全体で適用されます。変更前に進行中のルーム作業を停止してください。',
+    peerReadOnly: 'このホストはピアへの応答ポリシー複製をサポートしていません。このポリシーは読み取り専用です。',
+    revision: revision => `正規ルームのリビジョン ${revision}`,
+    continuationMode: '継続モード',
+    legacyBounded: '従来の上限制',
+    eventDriven: 'イベント駆動',
+    defaultResponder: '既定の応答者',
+    allMembers: 'すべてのメンバー',
+    leader: 'リーダー',
+    mentionsOnly: 'メンションのみ',
+    leaderMember: 'リーダーメンバー',
+    noLeader: 'リーダーなし',
+    maxTurns: 'ウィンドウあたりの最大ターン数',
+    windowSeconds: 'ウィンドウ秒数',
+    reading: '正規ポリシーを読み取りまたは検証中',
+    unavailableTitle: '応答ポリシーを利用できません',
+    verified: '検証済み: 正規ルームポリシーを再読み込みしました。',
+    reload: '正規ポリシーを再読み込み',
+    save: 'ルームの既定値を保存',
+    roomChanged: 'ルームが変更されました。応答ポリシーを開き直してください。',
+    authorityUnavailable: 'ルームの管理元を利用できません。',
+    hostUpdateRequired: '応答ポリシーを管理するにはルームホストを更新してください。',
+    invalidPolicy: '有効なポリシー、リーダー、ターン上限（1～32）、ウィンドウ（1～3600秒）を選択してください。',
+    invalidResponse: 'ルームホストから無効な正規ポリシーが返されました。',
+    peerUnsupported: 'このホストはピアへの応答ポリシー複製をサポートしていません。',
+    readFailed: '正規ルームポリシーを読み込めませんでした。ルーム接続を確認して再試行してください。',
+    saveFailed: 'ルームポリシーを保存できませんでした。進行中の作業を停止し、再読み込みしてから再試行してください。',
+    verificationFailed: 'ポリシーは変更された可能性がありますが、Desktop で検証できませんでした。編集前に再読み込みしてください。'
+  },
   tools: {
     skillsHub: 'Hermes スキルハブ',
     filterSkills: 'スキルを絞り込み…',
@@ -1255,6 +1366,42 @@ const zh: BotsMessages = {
     asks: handle => `@${handle} 的提问：`,
     answerTo: member => `回答 @${member}`
   },
+  policy: {
+    roomAction: '响应策略',
+    threadAction: '话题响应策略',
+    roomContext: group => `房间默认值 · ${group}`,
+    threadContext: (thread, group) => `话题 ${thread} · ${group}`,
+    roomId: id => `房间 ID：${id}`,
+    threadReadOnly: '此主机仅支持房间默认值，暂不支持话题覆盖；下方房间策略为只读。',
+    roomHint: '应用于此房间之后的所有响应。更改策略前，请先停止正在进行的房间任务。',
+    peerReadOnly: '此主机不支持向对等节点复制响应策略。该策略为只读。',
+    revision: revision => `规范房间修订版本 ${revision}`,
+    continuationMode: '续接模式',
+    legacyBounded: '旧版有界模式',
+    eventDriven: '事件驱动',
+    defaultResponder: '默认响应者',
+    allMembers: '所有成员',
+    leader: '负责人',
+    mentionsOnly: '仅提及成员',
+    leaderMember: '负责人成员',
+    noLeader: '无负责人',
+    maxTurns: '每个窗口的最大轮次',
+    windowSeconds: '窗口秒数',
+    reading: '正在读取或验证规范策略',
+    unavailableTitle: '响应策略不可用',
+    verified: '已验证：已重新加载规范房间策略。',
+    reload: '重新加载规范策略',
+    save: '保存房间默认值',
+    roomChanged: '房间已更改，请重新打开响应策略。',
+    authorityUnavailable: '房间管理主机不可用。',
+    hostUpdateRequired: '请更新房间主机以管理响应策略。',
+    invalidPolicy: '请选择有效的策略、负责人、轮次上限（1–32）和窗口（1–3600 秒）。',
+    invalidResponse: '房间主机返回了无效的规范策略。',
+    peerUnsupported: '此主机不支持向对等节点复制响应策略。',
+    readFailed: '无法加载规范房间策略。请检查房间连接后重试。',
+    saveFailed: '无法保存房间策略。请停止正在进行的房间任务、重新加载后再试。',
+    verificationFailed: '策略可能已更改，但 Desktop 无法验证。请在编辑前重新加载。'
+  },
   tools: {
     skillsHub: 'Hermes 技能中心',
     filterSkills: '筛选技能…',
@@ -1565,6 +1712,42 @@ const zhHant: BotsMessages = {
     wantsToRunCommand: name => `${name} 想執行一個命令：`,
     asks: handle => `@${handle} 的提問：`,
     answerTo: member => `回覆 @${member}`
+  },
+  policy: {
+    roomAction: '回應策略',
+    threadAction: '討論串回應策略',
+    roomContext: group => `房間預設值 · ${group}`,
+    threadContext: (thread, group) => `討論串 ${thread} · ${group}`,
+    roomId: id => `房間 ID：${id}`,
+    threadReadOnly: '此主機僅支援房間預設值，暫不支援討論串覆寫；下方房間策略為唯讀。',
+    roomHint: '套用於此房間之後的所有回應。變更策略前，請先停止正在進行的房間工作。',
+    peerReadOnly: '此主機不支援向對等節點複寫回應策略。此策略為唯讀。',
+    revision: revision => `標準房間修訂版本 ${revision}`,
+    continuationMode: '續接模式',
+    legacyBounded: '舊版有界模式',
+    eventDriven: '事件驅動',
+    defaultResponder: '預設回應者',
+    allMembers: '所有成員',
+    leader: '負責人',
+    mentionsOnly: '僅提及成員',
+    leaderMember: '負責人成員',
+    noLeader: '無負責人',
+    maxTurns: '每個視窗的最大回合數',
+    windowSeconds: '視窗秒數',
+    reading: '正在讀取或驗證標準策略',
+    unavailableTitle: '回應策略無法使用',
+    verified: '已驗證：已重新載入標準房間策略。',
+    reload: '重新載入標準策略',
+    save: '儲存房間預設值',
+    roomChanged: '房間已變更，請重新開啟回應策略。',
+    authorityUnavailable: '房間管理主機無法使用。',
+    hostUpdateRequired: '請更新房間主機以管理回應策略。',
+    invalidPolicy: '請選擇有效的策略、負責人、回合上限（1–32）和視窗（1–3600 秒）。',
+    invalidResponse: '房間主機傳回了無效的標準策略。',
+    peerUnsupported: '此主機不支援向對等節點複寫回應策略。',
+    readFailed: '無法載入標準房間策略。請檢查房間連線後再試。',
+    saveFailed: '無法儲存房間策略。請停止正在進行的房間工作、重新載入後再試。',
+    verificationFailed: '策略可能已變更，但 Desktop 無法驗證。請在編輯前重新載入。'
   },
   tools: {
     skillsHub: 'Hermes 技能中心',

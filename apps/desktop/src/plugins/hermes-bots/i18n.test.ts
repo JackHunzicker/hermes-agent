@@ -90,7 +90,14 @@ describe('BOTS_LOCALES', () => {
   })
 
   it('translates user-visible chrome instead of echoing English', () => {
-    const samples = ['roster.emptyTitle', 'bot.newTitle', 'group.manageTitle', 'tools.skillsHub'] as const
+    const samples = [
+      'roster.emptyTitle',
+      'bot.newTitle',
+      'group.manageTitle',
+      'policy.roomAction',
+      'tools.skillsHub'
+    ] as const
+
     const enByPath = Object.fromEntries(leafEntries(en))
 
     for (const locale of [ja, zh, zhHant]) {
