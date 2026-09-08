@@ -110,6 +110,24 @@ it('re-resolves authority immediately before a write and refuses a retargeted co
   expect(request).not.toHaveBeenCalled()
 })
 
+it('refuses a connection retarget while the preflight state request is pending', async () => {
+  const snapshot = await loadHostedPolicy('Board', 'room')
+  request.mockClear()
+  request.mockImplementationOnce(async () => {
+    capabilities.get.mockReturnValue({
+      home: {
+        authorityId: 'different-authority',
+        methods: ['groups.state', 'groups.policy.update'],
+        features: ['responder_policy_v1']
+      }
+    })
+
+    return state()
+  })
+  await expect(saveHostedPolicy(snapshot, snapshot.policy, 'retarget-during-read')).rejects.toBeDefined()
+  expect(request.mock.calls.map(call => call[1])).toEqual(['groups.state'])
+})
+
 it('refuses a write after the local authority epoch changes', async () => {
   const snapshot = await loadHostedPolicy('Board', 'room')
 
@@ -129,11 +147,13 @@ it('does not report verification success when a newer canonical policy differs f
   different.room.revision = 8
   different.room.responder_policy.default_responder = 'mentions_only'
   different.room.responder_policy.leader_member_id = null
-  request.mockResolvedValueOnce({ room: { revision: 8 } }).mockResolvedValueOnce(different)
+  request.mockClear()
+  request.mockResolvedValueOnce(state()).mockResolvedValueOnce({ room: { revision: 8 } }).mockResolvedValueOnce(different)
 
   await expect(
     saveHostedPolicy(snapshot, { ...snapshot.policy, max_turns_per_window: 5 }, 'concurrent-policy')
   ).rejects.toMatchObject({ code: 'verificationFailed' })
+  expect(request.mock.calls.map(call => call[1])).toEqual(['groups.state', 'groups.policy.update', 'groups.state'])
 })
 
 it('loads canonical policy and writes the captured revision and stable member ID, then reads back', async () => {

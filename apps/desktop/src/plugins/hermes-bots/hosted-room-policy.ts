@@ -265,6 +265,9 @@ export async function saveHostedPolicy(snapshot: HostedPolicySnapshot, policy: R
     throw failure('verificationFailed', error)
   }
 
+  assertBinding(snapshot)
+  assertSupported(route, snapshot.authorityId)
+
   try {
     await requestHostedConnection(route, 'groups.policy.update', {
       room_id: snapshot.roomId,
