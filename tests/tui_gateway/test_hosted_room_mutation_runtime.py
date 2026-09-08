@@ -53,15 +53,18 @@ def test_default_room_keeps_mutation_notice_in_next_runtime_input(participant, o
 
 
 
-def test_legacy_mutation_backlog_is_bounded_without_losing_oldest_notice(participant):
+@pytest.mark.parametrize("budget", ["lines", "ascii_bytes", "escaped_unicode_bytes"])
+def test_legacy_mutation_backlog_is_bounded_without_losing_oldest_notice(participant, budget):
     from gateway.hosted_room_history import mutate_message
     from gateway.hosted_room_policy_checkpoint import MAX_THREAD_TRANSCRIPT_EVENTS
     service, room, source, _, session = participant
     revision = source["seq"]
     mutations = []
-    for index in range(MAX_THREAD_TRANSCRIPT_EVENTS + 2):
+    count = MAX_THREAD_TRANSCRIPT_EVENTS + 2 if budget == "lines" else 3
+    body = {"lines": "", "ascii_bytes": "x" * 60000, "escaped_unicode_bytes": "🚀" * 5000}[budget]
+    for index in range(count):
         result = mutate_message(service.db_path, room_id=room["room_id"], event_id=f"edit-{index}",
-            target_event_id=source["event_id"], actor=source["actor"], operation="edit", text=f"correction {index}",
+            target_event_id=source["event_id"], actor=source["actor"], operation="edit", text=f"correction {index} {body}",
             expected_revision=revision, authority_gateway_id=room["authority_gateway_id"], authority_epoch=room["authority_epoch"])
         revision = result["message"]["revision"]
         mutations.append(result["event"])
@@ -74,6 +77,10 @@ def test_legacy_mutation_backlog_is_bounded_without_losing_oldest_notice(partici
     records = [json.loads(line) for line in queued["payload"]["prompt"].splitlines() if line.strip().startswith('{')]
     assert mutations[0]["event_id"] in {r["event_id"] for r in records}, "oldest accepted correction was skipped"
     assert len(records) <= MAX_THREAD_TRANSCRIPT_EVENTS
+    represented = {record["event_id"] for record in records}
+    consumed = set(queued["payload"]["input_context"]["event_seqs"])
+    assert all(event["event_id"] in represented for event in mutations if event["seq"] in consumed)
+    assert len(queued["payload"]["prompt"].encode("utf-8")) <= driver.MAX_PROMPT_BYTES
     with service.policy_checkpoint._connect() as conn:
         retained = conn.execute("SELECT COUNT(*) FROM hosted_room_policy_transcript WHERE room_id=? AND kind LIKE 'message.%'",
             (room["room_id"],)).fetchone()[0]

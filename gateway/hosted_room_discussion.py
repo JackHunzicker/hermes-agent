@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from functools import partial
 from typing import Any, Literal
@@ -588,9 +588,13 @@ def _truncate_utf8_text(value: Any, *, max_bytes: int, suffix: str = "") -> str:
     return prefix + suffix if prefix else suffix.strip()
 
 
+class _PromptRecordBudgetExceeded(DiscussionValidationError):
+    """A candidate input prefix would omit a whole authoritative event record."""
+
+
 def _build_prompt(
     *, room: DiscussionRoom, member: DiscussionMember, messages: Sequence[_ValidatedEvent], watermark: int,
-    seen_through_seq: int) -> str:
+    seen_through_seq: int, require_event_records: bool = False) -> str:
     delta = [
         event for event in messages if watermark < event.seq <= seen_through_seq
         and not (event.kind == "message.member" and event.payload.get("member_id") == member.member_id)
@@ -617,8 +621,13 @@ def _build_prompt(
     for event in reversed(delta):
         line = f"  {_format_message(event, room)}"
         if (line_bytes := len(line.encode("utf-8")) + 1) > available:
+            if require_event_records and (selected or len(delta) > 1 or available <= 32):
+                raise _PromptRecordBudgetExceeded("input prefix exceeds the rendered record budget")
             if not selected and available > 32:
-                selected.append("  " + _format_message(event, room, max_bytes=available - 64))
+                record = _format_message(event, room, max_bytes=available - 64)
+                if require_event_records and not record.startswith("{"):
+                    raise _PromptRecordBudgetExceeded("event identity cannot fit the rendered record budget")
+                selected.append("  " + record)
             selected.append("  [Earlier content omitted to fit this turn.]")
             break
         selected.append(line)
@@ -804,10 +813,13 @@ def plan_next_task(
             # Keep accepted corrections/handoffs in an oldest-first bounded input;
             # never advance their watermark past lines omitted by prompt rendering.
             pending = [event for event in thread_messages if event.seq > watermark]
-            if any(seq > watermark for seq in accepted_seqs):
+            protect_accepted = any(seq > watermark for seq in accepted_seqs)
+            if protect_accepted:
                 pending = pending[:MAX_DISCUSSION_DELTA_LINES]
             seen_through_seq, delta, attachments = _bounded_task_delta(
-                pending, watermark=watermark, maximum_seq=maximum_seen_seq)
+                pending, watermark=watermark, maximum_seq=maximum_seen_seq,
+                prompt_check=(partial(_build_prompt, room=room, member=member, watermark=watermark,
+                                      require_event_records=True) if protect_accepted else None))
             if not delta:
                 continue
             prompt = _build_prompt(
@@ -1019,6 +1031,7 @@ def _bounded_task_delta(
     *,
     watermark: int,
     maximum_seq: int,
+    prompt_check: Callable[..., str] | None = None,
 ) -> tuple[int, list[_ValidatedEvent], list[dict[str, Any]]]:
     """Return the oldest complete input prefix that fits one model turn.
 
@@ -1049,6 +1062,13 @@ def _bounded_task_delta(
             raise DiscussionValidationError(
                 "one user message exceeds the per-task attachment budget"
             )
+        if prompt_check is not None:
+            try:
+                prompt_check(messages=[*selected, event], seen_through_seq=event.seq)
+            except _PromptRecordBudgetExceeded:
+                if not selected:
+                    raise
+                break
         selected.append(event)
         attachments.extend(dict(attachment) for attachment in event_attachments)
         attachment_bytes = next_bytes
