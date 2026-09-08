@@ -24,6 +24,34 @@ class RoomReaderUpgradeRequired(rooms.HostedRoomError):
         return {"reason": self.reason, "required_features": self.required_features, "action": "upgrade_client"}
 
 
+def require_peer_writers(conn, room_id, kind):
+    """Gate semantic appends under the same write lock as membership and routes."""
+    import json
+    from gateway.hosted_room_peer import GatewayRoomCatalog, HostedRoomPeerError
+
+    feature = EVENT_FEATURES.get(kind)
+    if feature is None:
+        return
+    row = conn.execute("SELECT members_json FROM hosted_rooms WHERE room_id=?", (room_id,)).fetchone()
+    members = json.loads(row[0])
+    routes = {r["member_id"]: r for r in conn.execute(
+        "SELECT member_id,target_profile,catalog_json FROM hosted_room_links WHERE room_id=?", (room_id,))}
+    for member in members:
+        target = member.get("target", {})
+        if target.get("kind") != "peer":
+            continue
+        route = routes.get(member["member_id"])
+        try:
+            catalog = GatewayRoomCatalog.from_mapping(json.loads(route["catalog_json"])) if route else None
+        except (ValueError, TypeError, HostedRoomPeerError):
+            catalog = None
+        if (catalog is None or catalog.installation_id != target.get("installation_id")
+                or catalog.execution_policy.target_profile != member["profile"]
+                or route["target_profile"] != member["profile"]
+                or feature not in (catalog.supported_features or ())):
+            raise RoomReaderUpgradeRequired({feature})
+
+
 def require_reader(conn, room_id, supported_features):
     if not isinstance(supported_features, (list, tuple)) or not all(isinstance(f, str) for f in supported_features):
         raise rooms.HostedRoomError("supported_features must be a list of strings")

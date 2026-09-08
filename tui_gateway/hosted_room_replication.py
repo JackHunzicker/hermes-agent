@@ -485,10 +485,10 @@ class HostedRoomReplicationPublisher:
         limit = PAGE_LIMIT if pending is None else max(1, pending - cursor)
         from gateway.hosted_room_capabilities import RoomReaderUpgradeRequired
         try:
-            # RoomLink v2 catalogs do not negotiate mutation/control projections.
+            # Copy scoped controls verbatim; never widen a thread/task Stop into room Stop.
             page = rooms.read_events(
                 self.db_path, room_id=key[0], since_seq=cursor, limit=limit, include_disbanded=True,
-                supported_features=[],
+                supported_features=route.link.catalog.supported_features or (),
             )
         except RoomReaderUpgradeRequired:
             self._save(route, checkpoint, status="room_reader_upgrade_required",

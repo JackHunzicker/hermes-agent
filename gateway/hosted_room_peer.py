@@ -208,10 +208,11 @@ class GatewayRoomCatalog:
     endpoint_url: str | None = None
     endpoint_reason: str | None = None
     transport_security: TransportSecurity | None = None
+    supported_features: tuple[str, ...] | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "GatewayRoomCatalog":
-        _exact_fields(value, required=_CATALOG_FIELDS, optional={"endpoint"}, label="capability catalog")
+        _exact_fields(value, required=_CATALOG_FIELDS, optional={"endpoint", "supported_features"}, label="capability catalog")
         installation_id = _identifier(value["installation_id"], field="installation_id")
         versions = tuple(_protocol_versions(_non_empty_list(value["protocol_versions"], field="protocol_versions")))
         links = _parse_link_modes(value["link_modes"])
@@ -220,9 +221,16 @@ class GatewayRoomCatalog:
                 raise HostedRoomPeerError(f"{field} must be a boolean")
         policy = RoomExecutionPolicy.from_mapping(value["execution_policy"])
         endpoint = _parse_endpoint(value["endpoint"]) if "endpoint" in value else (None, None, None)
+        features = value.get("supported_features")
+        if "supported_features" in value:
+            if (not isinstance(features, list) or len(features) > 128
+                    or any(not isinstance(f, str) or not _IDENTIFIER_RE.fullmatch(f) for f in features)
+                    or features != sorted(set(features))):
+                raise HostedRoomPeerError("supported_features must be a sorted unique list of identifiers")
+            features = tuple(features)
         catalog = cls(
             installation_id, versions, links, value["persistent_process"], value["text"], value["attachments"], policy,
-            _digest(value["catalog_digest"], field="catalog_digest"), *endpoint)
+            _digest(value["catalog_digest"], field="catalog_digest"), *endpoint, features)
         if not hmac.compare_digest(_catalog_digest(catalog.as_mapping()), catalog.catalog_digest):
             raise HostedRoomPeerError("catalog_digest does not match the catalog")
         return catalog
@@ -234,6 +242,8 @@ class GatewayRoomCatalog:
             "link_modes": list(self.link_modes), "persistent_process": self.persistent_process, "text": self.text,
             "attachments": self.attachments, "execution_policy": self.execution_policy.as_mapping(),
             "catalog_digest": self.catalog_digest}
+        if self.supported_features is not None:
+            value["supported_features"] = list(self.supported_features)
         if self.endpoint_url is not None or self.endpoint_reason is not None:
             value["endpoint"] = self.endpoint_mapping()
         return value
@@ -260,7 +270,9 @@ def catalog_mapping(
     # approval ContextVar, so rewriting the advertised policy cannot make it safe: refuse.
     if checked_policy.approval_mode == "off":
         raise HostedRoomPeerError("remote room execution requires manual or smart approvals")
+    from gateway.hosted_room_capabilities import EVENT_FEATURES
     value = {
+        "supported_features": sorted(set(EVENT_FEATURES.values()) - {"responder_policy_v1"}),
         "installation_id": _identifier(installation_id, field="installation_id"),
         "protocol_versions": _protocol_versions(protocol_versions),
         # Direct HTTPS/loopback is the only implemented RoomLink transport; never advertise pull/relay.

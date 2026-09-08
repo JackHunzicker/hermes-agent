@@ -167,6 +167,101 @@ def _child_publish(source, target, entered, release, results):
     results.put({"requests": http.requests, "status": pub.status()})
 
 
+@pytest.mark.parametrize("kind", ["message.edited", "message.deleted", "message.reaction",
+    "message.participant", "thread.stop_requested", "task.stop_requested"])
+@pytest.mark.parametrize("negotiation", ["legacy", "missing", "tampered"])
+def test_incompatible_peer_writes_reject_before_append(pair, kind, negotiation):
+    from gateway.hosted_room_capabilities import RoomReaderUpgradeRequired
+    if negotiation == "missing":
+        members = rooms.room_state(pair.source, room_id="room")["members"]
+        pair.source = pair.source.with_name("unlinked.db")
+        rooms.create_room(pair.source, room_id="room", name="Unlinked", members=members, authority_gateway_id=HOME)
+        append(pair.source, "hello")
+    with sqlite3.connect(pair.source) as conn:
+        if negotiation != "missing":
+            catalog = pair.link.catalog.as_mapping()
+            catalog.pop("supported_features", None)
+            if negotiation == "legacy":
+                catalog["catalog_digest"] = peer._catalog_digest(catalog)
+            conn.execute("UPDATE hosted_room_links SET catalog_json=?", (json.dumps(catalog),))
+    before = rooms.room_state(pair.source, room_id="room")
+    actor = {"kind": "gateway", "id": HOME}
+    if kind.startswith("message."):
+        actor = {"kind": "member", "id": "writer", "profile": "default"}
+    with pytest.raises(RoomReaderUpgradeRequired):
+        rooms.append_event(pair.source, room_id="room", event_id="unsupported", kind=kind,
+            actor=actor, payload={}, authority_gateway_id=HOME, authority_epoch=1)
+    assert rooms.room_state(pair.source, room_id="room") == before
+    assert append(pair.source, "ordinary")["seq"] == before["latest_seq"] + 1
+
+
+def test_link_downgrade_cannot_strand_existing_semantic_history(pair):
+    from gateway.hosted_room_capabilities import RoomReaderUpgradeRequired
+    from gateway.hosted_room_history import mutate_message
+    mutate_message(pair.source, room_id="room", event_id="edit", target_event_id="hello",
+        actor={"kind": "user", "id": "owner"}, operation="edit", expected_revision=1,
+        text="corrected", authority_gateway_id=HOME, authority_epoch=1)
+    legacy = pair.link.catalog.as_mapping()
+    legacy.pop("supported_features")
+    legacy["catalog_digest"] = peer._catalog_digest(legacy)
+    old_catalog = peer.GatewayRoomCatalog.from_mapping(legacy)
+    assert old_catalog.as_mapping() == legacy
+    with pytest.raises(RoomReaderUpgradeRequired):
+        links.save_room_link(pair.source, replace(pair.link, catalog=old_catalog))
+    assert links.load_room_links(pair.source)[0].catalog == pair.link.catalog
+
+
+def test_semantic_events_converge_in_mixed_room_through_disband(pair, monkeypatch):
+    from gateway import hosted_room_driver as driver, hosted_room_participants as participants
+    from gateway.hosted_room_history import mutate_message
+    from gateway.hosted_room_scoped_controls import append_stop
+    from tests.tui_gateway.hosted_room_service_fixtures import _server
+
+    pub = publisher.HostedRoomReplicationPublisher(pair.source)
+    pub._publish_one(KEY)
+    edited = mutate_message(pair.source, room_id="room", event_id="edit", target_event_id="hello",
+        actor={"kind": "user", "id": "owner"}, operation="edit", expected_revision=1,
+        text="corrected", authority_gateway_id=HOME, authority_epoch=1)["event"]
+    pub._publish_one(KEY)
+    assert state(pub)["acked_seq"] == edited["seq"]
+    service = HostedRoomService(_server(), db_path=pair.source)
+    service.local_profiles = lambda: ("default",)
+    service.send(room_id="room", event_id="writer-source", payload={"text": "@writer inspect", "thread_id": "thread"})
+    pub._publish_one(KEY)
+    task = next(t for t in driver.list_tasks(pair.source, room_id="room")
+                if t["payload"]["target_member_id"] == "writer")
+    lease = driver.acquire_lease(pair.source, room_id="room", gateway_id=HOME, authority_epoch=1,
+        process_generation="mixed-test", ttl_seconds=120, clock=time.time)
+    attempt = driver.start_task(pair.source, task["identity"], lease,
+        expected_cancel_generation=task["cancel_generation"], clock=time.time)
+    identity = task["identity"]
+    proof = {"room_id": "room", "thread_id": identity.thread_id, "turn_id": identity.turn_id,
+        "task_id": identity.task_id, "member_id": "writer", "target_profile": "default",
+        "execution_generation": attempt.execution_generation, "home_install_id": HOME,
+        "target_install_id": HOME, "authority_gateway_id": HOME, "authority_epoch": 1}
+    monkeypatch.setattr(rooms, "default_db_path", lambda: pair.source)
+    handoff = participants.participant_send(proof, {"event_id": "handoff", "text": "@reviewer inspect"})["event"]
+    assert handoff["payload"]["mention_member_ids"] == ["reviewer"]
+    stop = append_stop(pair.source, rooms.room_state(pair.source, room_id="room"), "stop-thread",
+                       {"kind": "thread", "thread_id": identity.thread_id})
+    task_stop = append_stop(pair.source, rooms.room_state(pair.source, room_id="room"), "stop-task",
+        {"kind": "task", "thread_id": "other", "task_id": "other-task",
+         "execution_generation": 1, "cancel_generation": 0})
+    later = append(pair.source, "later")
+    restarted = publisher.HostedRoomReplicationPublisher(pair.source)
+    restarted._publish_one(KEY)
+    assert state(restarted)["acked_seq"] == later["seq"]
+    copied = pair.http.requests[-1][1]["page"]["events"]
+    assert [(e["kind"], e["payload"]) for e in copied] == [
+        (e["kind"], e["payload"]) for e in (handoff, stop, task_stop, later)]
+    assert replicas.replica_state(pair.target, room_id="room")["safety_status"] == "passive"
+    rooms.disband_room(pair.source, room_id="room", expected_gateway_id=HOME, expected_epoch=1)
+    restarted._publish_one(KEY)
+    assert replicas.replica_state(pair.target, room_id="room")["disbanded_at"] is not None
+    assert state(restarted)["acked_seq"] == rooms.room_state(
+        pair.source, room_id="room", include_disbanded=True)["latest_seq"]
+
+
 def test_restart_checkpoint_suppresses_unchanged_http_and_remains_passive(pair):
     first = publisher.HostedRoomReplicationPublisher(pair.source)
     assert first._publish_one(KEY) is False

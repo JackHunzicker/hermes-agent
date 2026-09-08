@@ -187,7 +187,13 @@ def upsert_room_link_record(
     expected_grant_sha256: str | None = None,
 ) -> None:
     """Atomically insert or replace one private RoomLink record."""
+    import json
+    from gateway.hosted_room_capabilities import require_reader
+    from gateway.hosted_room_peer import GatewayRoomCatalog
+
+    catalog = GatewayRoomCatalog.from_mapping(json.loads(record["catalog_json"]))
     with _transaction(db_path, immediate=True) as conn:
+        require_reader(conn, record["room_id"], catalog.supported_features or ())
         fenced = conn.execute(
             "SELECT 1 FROM hosted_room_disband_fences WHERE room_id=?",
             (record["room_id"],),
