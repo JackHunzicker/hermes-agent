@@ -1516,6 +1516,7 @@ class HostedRoomService(HostedRoomScopedControlsMixin, HostedRoomArtifactMixin):
                 payload=normalized,
                 authority_gateway_id=authority[0],
                 authority_epoch=authority[1],
+                expected_revision=int(room["revision"]),
             )
         except Exception:
             if transitioned_attachment_ids:

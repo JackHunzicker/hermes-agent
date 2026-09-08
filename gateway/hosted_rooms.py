@@ -533,6 +533,8 @@ def _insert_event(
     conn: sqlite3.Connection, room: sqlite3.Row, room_id: str, seq: int, event_id: str, kind: str, actor_json: str,
     epoch: int, payload_json: str, now: float, *, allow_control: bool = False) -> int:
     """Capacity-check then INSERT one event at ``seq``; returns its accounted bytes."""
+    from gateway.hosted_room_capabilities import require_peer_writers
+    require_peer_writers(conn, room_id, kind)
     event_bytes = _prepare_event(conn, room, event_id, kind, actor_json, payload_json, allow_control=allow_control)
     conn.execute(_INSERT_EVENT, (room_id, seq, event_id, kind, actor_json, epoch, payload_json, now))
     return event_bytes
@@ -1182,13 +1184,15 @@ def rename_room(db_path: DbPath, *, room_id: Any, event_id: Any, name: Any, now:
 def append_event(
     db_path: DbPath, *, room_id: Any, event_id: Any, kind: Any, actor: Any, payload: Any,
     authority_gateway_id: Any = None, authority_epoch: Any = None, now: float | None = None,
-    expected_latest_seq: int | None = None) -> dict[str, Any]:
+    expected_latest_seq: int | None = None, expected_revision: int | None = None) -> dict[str, Any]:
     """Append one immutable event and allocate its per-room sequence atomically; repeating an ``event_id``
     with identical content returns the original, different content fails closed."""
     room_id = _room_id(room_id)
     event_id = _event_id(event_id)
     if expected_latest_seq is not None:
         _bounded_int(expected_latest_seq, message="expected_latest_seq must be a nonnegative integer")
+    if expected_revision is not None:
+        _require_positive_int(expected_revision, "expected_revision")
     kind = _validate_event_kind(kind)
     normalized_actor, actor_json = _validate_actor(actor, kind=kind)
     # Every admitted actor kind is room-scoped, so authority fields are always required.
@@ -1208,9 +1212,11 @@ def append_event(
                 raise EventConflictError("event_id already exists with different content")
             return _event_from_row(existing, idempotent=True)
         room = _room_row(
-            conn, """SELECT next_seq, event_bytes, authority_gateway_id, authority_epoch
+            conn, """SELECT next_seq, event_bytes, authority_gateway_id, authority_epoch, revision
                 FROM hosted_rooms WHERE room_id=? AND disbanded_at IS NULL""", (room_id,), room_id)
         _require_authority(room, authority_gateway_id, authority_epoch, "stale hosted room authority")
+        if expected_revision is not None and int(room["revision"]) != expected_revision:
+            raise RoomConflictError("room revision changed; reload before sending")
         if kind == "message.user":
             route_schema.require_room_work_open(conn, room_id, error=HostedRoomError)
         seq = int(room["next_seq"])

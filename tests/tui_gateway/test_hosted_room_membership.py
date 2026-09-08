@@ -1,10 +1,51 @@
 """Membership changes keep historical authors while fencing new work."""
 
+import sqlite3
+
 import pytest
 
 from gateway import hosted_room_discussion as discussion, hosted_room_driver as driver, hosted_rooms
 from tui_gateway.hosted_room_service import HostedRoomService
 from tests.tui_gateway.hosted_room_service_fixtures import _server
+
+
+@pytest.mark.parametrize("with_attachment", [False, True])
+def test_send_roster_race_commits_neither_message_nor_attachment(tmp_path, monkeypatch, with_attachment):
+    db = tmp_path / "state.db"
+    service = service_at(db)
+    room = service.create_room(room_id="room-1", name="Review", members=MEMBERS)
+    payload = {"text": "@ops inspect", "thread_id": "t1"}
+    stored = None
+    if with_attachment:
+        stored = service.put_attachment(room_id="room-1", upload_id="race-upload",
+            kind="file", name="notes.txt", mime="text/plain", data=b"notes")
+        payload["attachments"] = [{key: stored[key]
+            for key in ("attachment_id", "kind", "name", "size", "mime")}]
+    append = hosted_rooms.append_event
+
+    def change_roster_before_append(*args, **kwargs):
+        service.update_members(room_id="room-1", event_id="remove-ops",
+            expected_revision=room["revision"], members=[MEMBERS[0], MEMBERS[2]])
+        return append(*args, **kwargs)
+
+    monkeypatch.setattr(hosted_rooms, "append_event", change_roster_before_append)
+    with pytest.raises(hosted_rooms.HostedRoomError):
+        service.send(room_id="room-1", event_id="raced-send", payload=payload)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT event_id FROM hosted_room_events WHERE event_id='raced-send'").fetchone() is None
+        if stored:
+            state, event_id, expiry = conn.execute(
+                "SELECT state,event_id,expires_at FROM hosted_room_attachments WHERE attachment_id=?",
+                (stored["attachment_id"],)).fetchone()
+            assert state == "uploaded"
+            assert event_id is None
+            assert expiry is not None
+    monkeypatch.setattr(hosted_rooms, "append_event", append)
+    payload["text"] = "@review inspect"
+    event = service.send(room_id="room-1", event_id="raced-send", payload=payload)
+    assert event["event_id"] == "raced-send"
+    assert service.send(room_id="room-1", event_id="raced-send", payload=payload)["idempotent"] is True
+
 
 
 MEMBERS = [
